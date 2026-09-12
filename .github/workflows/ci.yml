@@ -1,0 +1,27 @@
+name: ci
+
+on: [push, pull_request]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+
+      # Chunking, retrieval and agent tests. No API key: the hash embedder and
+      # the stub LLM keep CI free and deterministic.
+      - run: python -m pytest tests/ -q
+
+      - run: python scripts/ingest.py --kb kb --db ci.db --provider hash
+
+      # Retrieval gate. A prompt or chunking change that drops recall below
+      # threshold fails the build rather than silently degrading answers.
+      - run: python scripts/eval_retrieval.py --db ci.db --provider hash --k 6 --min-recall 0.85
+
+      # Safety gate. Any reply emitting its must_not_contain phrase fails the
+      # build. This is the one that catches an answer that is true and forbidden.
+      - run: python scripts/eval_agent.py --db ci.db --provider hash --llm stub --max-violations 0

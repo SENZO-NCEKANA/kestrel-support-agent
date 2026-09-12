@@ -1,0 +1,29 @@
+# Core — required
+numpy>=1.26
+
+# The agent graph. Needed by the offline test suite, not just the production
+# path: tests/test_agent.py imports kestrel.agent. langgraph itself needs no
+# credentials and costs nothing, so this does not break the free-CI property.
+langgraph>=1.0
+
+# Retrieval eval and tests run fully offline with the hash embedder.
+# Everything below is only needed for the production path.
+
+# Embeddings (EMBEDDING_PROVIDER=openai) and the agent LLM (LLM_PROVIDER=openai).
+# One credential covers both.
+openai>=1.40
+
+# Cross-encoder reranking (RERANKER=cross-encoder). Optional, and deliberately
+# not core: the default NoopReranker keeps CI free and needs no model download.
+# onnxruntime rather than sentence-transformers because the latter requires
+# torch, which ships no macOS x86_64 wheel for Python 3.12+. Same MiniLM
+# weights, ~50MB instead of ~2GB.
+# onnxruntime>=1.20
+# tokenizers>=0.20
+# huggingface-hub>=0.25
+
+# pgvector backend
+# psycopg[binary]>=3.1
+
+# Dev
+pytest>=8.0
