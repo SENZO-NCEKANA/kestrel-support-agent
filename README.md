@@ -203,7 +203,13 @@ matrix is `customer_facing: false` and enters retrieval only when triage
 requests it via `force_docs`. See below for why.
 
 **Content-hash incremental ingestion.** Re-embedding an unchanged corpus costs
-nothing; editing one document re-embeds only its changed chunks.
+nothing; editing one document re-embeds only its changed chunks. A hash only
+means "unchanged" inside one embedding space, so each store also records the
+embedder that built it. The first version keyed on the hash alone, and switching
+to OpenAI embeddings silently re-embedded nothing — the corpus had not changed —
+leaving 256-dimensional vectors to crash the first 1536-dimensional query in a
+numpy error far from the cause. Switching embedders now re-embeds everything,
+and querying a store with the wrong embedder is refused with an error naming both.
 
 ## A bug worth reading about
 

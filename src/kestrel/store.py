@@ -10,6 +10,12 @@ Incremental ingestion: every chunk carries a content hash. Re-ingesting an
 unchanged corpus costs nothing. Editing one policy document re-embeds only
 the chunks that changed. On a real KB this is the difference between a
 cent and a rand every time someone fixes a typo.
+
+A hash only means "unchanged" inside one embedding space, so a store also
+records the fingerprint of the embedder that built it, under `EMBEDDER_KEY`.
+The invariant is store-wide rather than per chunk: vectors from two embedders
+are not comparable even at equal dimension, so a store holds exactly one space
+and switching is all-or-nothing.
 """
 
 from __future__ import annotations
@@ -21,6 +27,10 @@ from pathlib import Path
 from typing import Protocol
 
 import numpy as np
+
+# Store metadata key holding kestrel.embeddings.fingerprint() of the embedder
+# that wrote the vectors.
+EMBEDDER_KEY = "embedder"
 
 
 @dataclass
@@ -42,6 +52,8 @@ class VectorStore(Protocol):
     def delete(self, chunk_ids: list[str]) -> None: ...
     def all_records(self) -> list[Record]: ...
     def search(self, vector: np.ndarray, k: int) -> list[tuple[Record, float]]: ...
+    def get_meta(self, key: str) -> str | None: ...
+    def set_meta(self, key: str, value: str) -> None: ...
 
 
 class SQLiteStore:
@@ -72,6 +84,12 @@ class SQLiteStore:
             """
         )
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_doc ON chunks(doc_id)")
+        # IF NOT EXISTS, so a database built before fingerprints gains the table
+        # on open with no migration step. It starts empty, which ingest reads as
+        # "space unknown" and answers by re-embedding.
+        self.conn.execute(
+            "CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)"
+        )
         self.conn.commit()
 
     def upsert(self, records: list[Record], vectors: np.ndarray) -> None:
@@ -93,6 +111,16 @@ class SQLiteStore:
     def existing_hashes(self) -> dict[str, str]:
         cur = self.conn.execute("SELECT chunk_id, content_hash FROM chunks")
         return dict(cur.fetchall())
+
+    def get_meta(self, key: str) -> str | None:
+        row = self.conn.execute("SELECT value FROM meta WHERE key = ?", (key,)).fetchone()
+        return row[0] if row else None
+
+    def set_meta(self, key: str, value: str) -> None:
+        self.conn.execute(
+            "INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)", (key, value)
+        )
+        self.conn.commit()
 
     def delete(self, chunk_ids: list[str]) -> None:
         if not chunk_ids:
@@ -125,6 +153,19 @@ class SQLiteStore:
             return []
         mat = np.vstack([np.frombuffer(r[9], dtype=np.float32) for r in rows])
         q = np.asarray(vector, dtype=np.float32)
+
+        # The retriever checks fingerprints first; this is the last line of
+        # defence for a store built before fingerprints existed. Without it the
+        # failure is numpy's matmul error, which names a gufunc signature and
+        # says nothing about embedders.
+        if mat.shape[1] != q.shape[0]:
+            raise ValueError(
+                f"query vector has {q.shape[0]} dimensions but {self.path} holds "
+                f"{mat.shape[1]}-dimensional vectors. The store was built by a "
+                "different embedder than the one embedding this query: re-ingest "
+                "with this provider, or query with the one that built it."
+            )
+
         qn = np.linalg.norm(q)
         if qn:
             q = q / qn
@@ -140,6 +181,14 @@ class PgVectorStore:
     """Production backend. Same interface, pgvector for ANN at scale.
 
     Requires: CREATE EXTENSION vector; and psycopg installed.
+
+    The `vector({dim})` column is fixed when the table is created. The embedder
+    fingerprint makes a switch visible to ingest, but a switch to a different
+    dimension still needs a fresh table here — pgvector will reject the upsert
+    rather than store it, which is the right failure, not a silent one.
+
+    Untested in this repository: CI has no Postgres, and the meta methods below
+    mirror the SQLite ones rather than having been run.
     """
 
     def __init__(self, dsn: str, dim: int = 1536):
@@ -169,12 +218,30 @@ class PgVectorStore:
                 "CREATE INDEX IF NOT EXISTS idx_chunks_vec ON chunks "
                 "USING hnsw (vector vector_cosine_ops)"
             )
+            cur.execute(
+                "CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)"
+            )
         self.conn.commit()
 
     def existing_hashes(self) -> dict[str, str]:
         with self.conn.cursor() as cur:
             cur.execute("SELECT chunk_id, content_hash FROM chunks")
             return dict(cur.fetchall())
+
+    def get_meta(self, key: str) -> str | None:
+        with self.conn.cursor() as cur:
+            cur.execute("SELECT value FROM meta WHERE key = %s", (key,))
+            row = cur.fetchone()
+            return row[0] if row else None
+
+    def set_meta(self, key: str, value: str) -> None:
+        with self.conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO meta (key, value) VALUES (%s, %s) "
+                "ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
+                (key, value),
+            )
+        self.conn.commit()
 
     def upsert(self, records: list[Record], vectors: np.ndarray) -> None:
         with self.conn.cursor() as cur:

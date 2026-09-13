@@ -2,13 +2,14 @@
 import tempfile
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 from kestrel.bm25 import BM25, tokenize
 from kestrel.embeddings import HashEmbedder
 from kestrel.ingest import ingest
 from kestrel.retrieval import HybridRetriever
-from kestrel.store import SQLiteStore
+from kestrel.store import EMBEDDER_KEY, SQLiteStore
 
 KB = Path(__file__).resolve().parents[1] / "kb"
 
@@ -71,6 +72,113 @@ def test_ingest_deletes_removed_chunks():
     second = ingest(kb, store, embedder)
     assert second.deleted == first.total_chunks
     assert second.total_chunks == 0
+
+
+# ------------------------------------------------------------ embedding space
+#
+# HashEmbedder(dim=256) and HashEmbedder(dim=128) have different fingerprints,
+# which is enough to exercise every path here without a network call.
+
+def _fresh_store(name: str = "space.db") -> SQLiteStore:
+    return SQLiteStore(str(Path(tempfile.mkdtemp()) / name))
+
+
+class _FailingEmbedder(HashEmbedder):
+    name = "failing"
+
+    def embed(self, texts):
+        raise RuntimeError("embedding API unavailable")
+
+
+def test_switching_embedder_reembeds_everything():
+    """Regression: the re-embed decision used the content hash alone.
+
+    Switching to OpenAI embeddings changed no hash, so nothing was re-embedded,
+    the report named a provider it had not used, and the first query crashed on
+    a dimension mismatch far from the cause.
+    """
+    store = _fresh_store()
+    first = ingest(KB, store, HashEmbedder(dim=256))
+    switched = ingest(KB, store, HashEmbedder(dim=128))
+
+    assert switched.embedded == switched.total_chunks == first.total_chunks
+    assert "embedder changed hash-fake::256 -> hash-fake::128" in str(switched)
+    assert HybridRetriever(store, HashEmbedder(dim=128)).retrieve("monthly fee on Plus")
+
+
+def test_new_embedder_is_recorded_so_the_next_run_skips():
+    store = _fresh_store()
+    ingest(KB, store, HashEmbedder(dim=256))
+    ingest(KB, store, HashEmbedder(dim=128))
+    again = ingest(KB, store, HashEmbedder(dim=128))
+    assert again.embedded == 0
+    assert again.note == ""
+
+
+def test_store_without_a_fingerprint_is_fully_reembedded():
+    """A database built before fingerprints cannot say which space it is in."""
+    store = _fresh_store()
+    ingest(KB, store, HashEmbedder())
+    store.conn.execute("DELETE FROM meta")
+    store.conn.commit()
+
+    report = ingest(KB, store, HashEmbedder())
+    assert report.embedded == report.total_chunks
+    assert "predates embedder fingerprints" in report.note
+
+
+def test_failed_embedding_leaves_the_old_fingerprint():
+    """The fingerprint must describe the vectors actually stored."""
+    store = _fresh_store()
+    ingest(KB, store, HashEmbedder())
+    before = store.get_meta(EMBEDDER_KEY)
+
+    with pytest.raises(RuntimeError):
+        ingest(KB, store, _FailingEmbedder(dim=128))
+    assert store.get_meta(EMBEDDER_KEY) == before
+
+
+def test_full_reembed_still_removes_deleted_documents():
+    tmp = Path(tempfile.mkdtemp())
+    kb = tmp / "kb"
+    kb.mkdir()
+    head = "---\ndoc_id: KB-TMP-00{n}\ntitle: Temp {n}\nversion: 1\n---\n\n# Section\n\n"
+    (kb / "a.md").write_text(head.format(n=1) + "alpha " * 200)
+    (kb / "b.md").write_text(head.format(n=2) + "beta " * 200)
+
+    store = SQLiteStore(str(tmp / "s.db"))
+    ingest(kb, store, HashEmbedder(dim=256))
+    (kb / "b.md").unlink()
+    second = ingest(kb, store, HashEmbedder(dim=128))
+
+    assert second.deleted > 0
+    assert {r.doc_id for r in store.all_records()} == {"KB-TMP-001"}
+
+
+def test_retriever_refuses_a_query_from_another_embedding_space():
+    store = _fresh_store()
+    ingest(KB, store, HashEmbedder(dim=256))
+    retriever = HybridRetriever(store, HashEmbedder(dim=128))
+
+    with pytest.raises(ValueError) as exc:
+        retriever.retrieve("monthly fee on Plus")
+    assert "hash-fake::256" in str(exc.value)
+    assert "hash-fake::128" in str(exc.value)
+
+
+def test_lexical_mode_never_embeds_so_it_ignores_the_space():
+    store = _fresh_store()
+    ingest(KB, store, HashEmbedder(dim=256))
+    retriever = HybridRetriever(store, HashEmbedder(dim=128))
+    assert retriever.retrieve("monthly fee on Plus", mode="lexical")
+
+
+def test_store_search_names_a_dimension_mismatch():
+    """Legacy stores have no fingerprint, so the store itself must refuse."""
+    store = _fresh_store()
+    ingest(KB, store, HashEmbedder(dim=256))
+    with pytest.raises(ValueError, match="dimensions"):
+        store.search(np.zeros(128, dtype=np.float32), k=3)
 
 
 def test_retriever_returns_hits(retriever):

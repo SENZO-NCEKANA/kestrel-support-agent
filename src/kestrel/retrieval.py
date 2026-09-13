@@ -43,9 +43,9 @@ from dataclasses import dataclass
 import numpy as np
 
 from .bm25 import BM25
-from .embeddings import Embedder
+from .embeddings import Embedder, fingerprint
 from .rerank import Reranker, get_reranker
-from .store import Record, VectorStore
+from .store import EMBEDDER_KEY, Record, VectorStore
 
 RRF_K = 60
 
@@ -93,6 +93,26 @@ class HybridRetriever:
         self.all_records: list[Record] = self.store.all_records()
         self.records = [r for r in self.all_records if not _is_internal(r)]
         self.bm25 = BM25([r.embed_text for r in self.records]) if self.records else None
+        # Cached with the records, so a retriever describes one consistent view
+        # of the store until the next refresh. None on a store that predates
+        # fingerprints; SQLiteStore.search catches that case on dimension.
+        self.store_embedder: str | None = self.store.get_meta(EMBEDDER_KEY)
+
+    def _check_embedding_space(self) -> None:
+        """Refuse to score a query against vectors from another embedding space.
+
+        Only called on the dense path. Lexical retrieval never embeds the query,
+        so a mismatched embedder is harmless there and refusing it would break a
+        mode that works.
+        """
+        query_space = fingerprint(self.embedder)
+        if self.store_embedder and self.store_embedder != query_space:
+            raise ValueError(
+                f"The store was embedded with {self.store_embedder} but queries are "
+                f"embedded with {query_space}. Vectors from different embedders "
+                "cannot be compared. Re-ingest with this provider, or pass the "
+                "--provider that built the store."
+            )
 
     def retrieve(
         self,
@@ -123,6 +143,7 @@ class HybridRetriever:
         dense: list[tuple[Record, float]] = []
         dense_rank: dict[str, int] = {}
         if mode != "lexical":
+            self._check_embedding_space()
             qvec = self.embedder.embed([query])[0]
             dense = [
                 (rec, score)

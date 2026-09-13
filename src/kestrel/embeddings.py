@@ -30,6 +30,18 @@ class Embedder(Protocol):
     def embed(self, texts: list[str]) -> np.ndarray: ...
 
 
+def fingerprint(embedder: Embedder) -> str:
+    """Identity of the embedding space an embedder writes into.
+
+    Two embedders produce comparable vectors only when they are the same model at
+    the same dimension. Dimension alone is not enough — a hash vector and an
+    OpenAI vector of equal length still have nothing to say to each other — so
+    the model is part of the key. Stores record this so a query is never scored
+    against vectors from a different space.
+    """
+    return f"{embedder.name}:{getattr(embedder, 'model', '')}:{embedder.dim}"
+
+
 class HashEmbedder:
     """Deterministic offline embedder. Tests and CI only."""
 
