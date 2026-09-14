@@ -122,9 +122,17 @@ def main():
         elapsed = sum(c["latency_ms"] for c in calls)
         tokens = sum(c["usage"].get("prompt_tokens", 0)
                      + c["usage"].get("completion_tokens", 0) for c in calls)
-        # The stub spends no tokens, so it reports none rather than a zero that
-        # reads like a measurement.
-        spend = f"{tokens} tokens" if tokens else "no tokens (stub)"
+        # Zero tokens has two different causes — the stub, which calls no API,
+        # or a real model whose calls all failed. Say which, rather than print a
+        # zero that reads like a measurement.
+        if tokens:
+            spend = f"{tokens} tokens"
+        elif agent.llm.name == "stub":
+            spend = "no tokens (stub)"
+        elif all(not c["ok"] for c in calls):
+            spend = "no tokens (every call failed)"
+        else:
+            spend = "no tokens reported"
         print(f"MODEL    {len(calls)} calls   {elapsed:.0f} ms   {spend}")
         failed = [c for c in calls if not c["ok"]]
         for c in failed:

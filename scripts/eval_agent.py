@@ -212,7 +212,14 @@ def main():
     print(f"  of which model calls        {sum(model_latencies) / n:8.1f} ms   "
           f"({model_share:.1%})")
 
-    if not total_tokens:
+    if not total_tokens and agent.llm.name != "stub":
+        # A real provider reporting no usage is not the stub's "unmeasurable". It
+        # almost always means the calls failed, and then the latency above is
+        # time spent failing, not answering.
+        print(f"\n  Tokens and cost: none recorded. {len(call_failures)} model calls"
+              "\n  failed — see llm call failures above. The latency above is time"
+              "\n  spent failing, not answering; do not quote it.")
+    elif not total_tokens:
         print("\n  Tokens and cost: not measurable. The stub calls no API, so the"
               "\n  model share above is regex time, and the ticket latency is"
               "\n  almost entirely retrieval, BM25 and the state machine. It is a"

@@ -2,7 +2,7 @@
 
 [![ci](https://github.com/SENZO-NCEKANA/kestrel-support-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/SENZO-NCEKANA/kestrel-support-agent/actions/workflows/ci.yml)
 
-A production-shaped RAG support agent for a South African neobank. Retrieval over a real policy corpus, tool calling, prompt-injection defence, confidence-based routing, and a 48-case evaluation suite wired into CI.
+A production-shaped RAG support agent for a South African neobank. Hybrid retrieval over a real policy corpus, tool calling with human approval on irreversible actions, prompt-injection defence, routing that escalates rather than guesses, and a 48-case evaluation suite wired into CI.
 
 > Kestrel Bank is fictional. The policy corpus is synthetic but modelled on South African financial services regulation — FICA, the FAIS Act, National Financial Ombud referral rights, and SARB exchange control allowances.
 
@@ -24,8 +24,9 @@ python3 scripts/eval_retrieval.py --db kestrel.db --k 6
 ```
 
 Runs with no credentials and no infrastructure. The default embedder is a
-deterministic hash projection so tests and CI are free and reproducible; set
-`EMBEDDING_PROVIDER=openai` for the real thing.
+deterministic hash projection and the default LLM is a keyword stub, so tests
+and CI are free and reproducible. See [Running against OpenAI](#running-against-openai)
+for the real providers.
 
 Ingest before evaluating — the eval reads the database, it does not build it.
 Annotations are kept out of the command lines above on purpose: zsh does not
@@ -46,17 +47,46 @@ pip3 install onnxruntime tokenizers huggingface-hub
 python3 scripts/eval_retrieval.py --db kestrel.db --k 6 --reranker cross-encoder
 ```
 
+### Running against OpenAI
+
+One key covers both embeddings and the agent's model. A separate database keeps
+the offline `kestrel.db` and the free commands working:
+
+```bash
+export OPENAI_API_KEY=sk-...
+export EMBEDDING_PROVIDER=openai
+export LLM_PROVIDER=openai
+python3 scripts/ingest.py --kb kb --db kestrel-openai.db
+python3 scripts/eval_retrieval.py --db kestrel-openai.db --k 6
+python3 scripts/eval_agent.py --db kestrel-openai.db --max-violations 0
+```
+
+Unset the three variables to go back to the offline path.
+
+- A store queried with a different embedder from the one that built it is refused
+  with an error naming both. Re-ingesting an existing store with a new embedder
+  re-embeds all of it, and the report says so.
+- `LLM_MODEL` (default `gpt-4o-mini`), `LLM_TIMEOUT` (default 30s) and
+  `LLM_MAX_RETRIES` (default 2) tune the client. A call that still fails escalates
+  its ticket instead of crashing the run.
+- `429 insufficient_quota` means the key is valid and the account has no credits.
+  Listing models is free, so it is not a billing check. A failed ingest writes no
+  vectors and no fingerprint; add credits and re-run it.
+- Cost is small: embedding the whole corpus is a fraction of a cent, and a full
+  48-case agent eval is estimated at under ten US cents on `gpt-4o-mini`. The eval
+  prints the real token count and list-price cost when it runs.
+
 ## What's here now
 
 ```
 kb/          9 policy documents (~590 lines) with deliberate retrieval traps
 evals/       48 labelled cases across 8 categories
 prompts/     triage, grounded answer, adversarial verifier
-src/kestrel/ chunking, BM25, embeddings, vector store, hybrid retrieval,
-             cross-encoder reranking, LLM protocol, model-output contracts,
-             injection filter, mock tools, agent graph
+src/kestrel/ chunking, BM25, embeddings, embedder-aware vector store,
+             hybrid retrieval, cross-encoder reranking, LLM providers,
+             model-output contracts, injection filter, mock tools, agent graph
 scripts/     ingest, retrieval eval, agent eval, single-ticket runner, query tool
-tests/       66 tests — table integrity, retrieval modes, reranking,
+tests/       74 tests — table integrity, ingestion, retrieval modes, reranking,
              fail-closed model contracts, agent safety
 ```
 
@@ -272,9 +302,13 @@ stop, not start answering compliance questions from a keyword fallback — that
 is not graceful degradation, it is an outage that answers.
 
 `tests/test_llm_contract.py` drives this with a `ScriptedLLM` that returns
-exactly the malformed payloads a real model produces. Those 19 tests are the
-only evidence the fail-closed behaviour works until there is a key to point at
-a live model.
+exactly the malformed payloads a real model produces. It has since held against
+a real provider too. Pointed at an OpenAI account with no credits, every call
+returned `429 insufficient_quota`; triage degraded and failed closed to
+`escalate`, the verifier blocked, and the customer received the safe escalation
+reply — not a stack trace, and not an answer. That proves the failure path
+against a live API. The success path, a model that actually answers well, is
+still unmeasured.
 
 ### What the offline numbers mean, and what they do not
 
@@ -360,11 +394,14 @@ Each case carries `expected_route`, `expected_sources`, `expected_tools`, `must_
 
 ## Metrics tracked
 
-- Routing accuracy vs `expected_route`
-- Groundedness (verifier-scored claims with a supporting span)
-- Hallucination rate (unsupported figures per 100 replies)
-- Injection catch rate and false-positive rate on benign mail
+Measured by `scripts/eval_retrieval.py` and `scripts/eval_agent.py`:
+
 - Retrieval recall@k against `expected_sources`
+- Routing accuracy vs `expected_route`
+- Injection catch rate and false-positive rate on benign mail
+- Tool selection against `expected_tools`
+- Forbidden-content violations against `must_not_contain` — a CI gate
+- `must_contain` coverage — **only under a real model**; the stub writes no answers
 - LLM call failures, and the tickets they failed closed
 - p95 and mean latency per ticket, measured end to end around the graph
 - Tokens and cost per ticket — **only under `LLM_PROVIDER=openai`**
@@ -378,12 +415,17 @@ there looks like a measurement and is not one. Cost is arithmetic off a
 list-price table in `scripts/eval_agent.py` that rots; a model missing from it
 prints token counts and no price rather than guessing.
 
+Not measured yet: **groundedness** (verifier-scored claims with a supporting
+span) and **hallucination rate** (unsupported figures per 100 replies). The
+verifier prompt already returns `unsupported_claims`, but nothing aggregates
+them, and under the stub there are no claims to score. Both wait on a real model.
+
 ## Roadmap
 
 - [x] Policy corpus with retrieval traps
 - [x] Labelled eval set
 - [x] Triage / answer / verifier prompts
-- [x] Ingestion with content-hash incremental re-embedding
+- [x] Ingestion with content-hash incremental re-embedding, fingerprinted per embedder
 - [x] Hybrid retrieval (BM25 + dense) with RRF fusion
 - [x] Retrieval eval + CI gate
 - [x] LangGraph state machine with interrupt-based human approval
@@ -391,7 +433,9 @@ prints token counts and no price rather than guessing.
 - [x] Eval runner + GitHub Actions gate
 - [x] Prompt-injection filter with a measured false-positive rate
 - [x] Fail-closed contract layer between model output and the graph
+- [x] Latency, token and cost instrumentation
 - [x] Cross-encoder reranking (opt-in; +1 case, 400x latency — see above)
+- [ ] A real LLM behind the graph (the OpenAI provider is wired, hardened, and has failed closed on a real 429; no model has answered through it yet)
+- [ ] Groundedness and hallucination-rate scoring (needs a real model)
 - [ ] Verifier revise loop (`revise` currently blocks, same as `block`)
-- [ ] A real LLM behind the graph (everything above runs on a stub)
 - [ ] Trace-visible demo UI
