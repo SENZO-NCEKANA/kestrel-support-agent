@@ -13,7 +13,9 @@ Three properties this structure buys:
 
 1. Triage can terminate. Escalation and refusal are routes, not instructions.
 2. The write tool interrupts. block_card suspends the graph for human approval
-   before it runs, because it cannot be undone.
+   before it runs, because it cannot be undone. Once approved and run, the reply
+   says so, even when the ticket escalates — a customer is never told no decision
+   was made after one was.
 3. Verify can veto. A draft that reaches finalise carrying forbidden content is
    discarded and replaced with a safe response, however fluent it was.
 """
@@ -38,12 +40,35 @@ PROMPTS = Path(__file__).resolve().parents[2] / "prompts"
 # Routes that must never produce a drafted answer.
 TERMINAL_ROUTES = {"escalate", "refuse", "clarify"}
 
+# The internal escalation and routing matrix. It reaches the answer layer through
+# force_docs, and triage reads its decision sections directly.
+GOVERNANCE_DOC = "KB-ESC-009"
+
+# The matrix sections triage routes on. Two are left out on purpose: Confidence
+# Routing depends on retrieval results triage has not seen yet — "conflicting
+# policies retrieved: escalate" would push triage toward escalating more, the
+# failure this exists to fix — and Untrusted Input is already enforced by the
+# rule-based filter and the untrusted-ticket envelope.
+TRIAGE_MATRIX_SECTIONS = (
+    "Purpose and Precedence",
+    "Mandatory Escalation",
+    "Mandatory Refusal, With Referral",
+    "Topics an Agent May Answer Fully",
+)
+
 SAFE_RESPONSES = {
     "escalate": (
         "I am not able to discuss this on the ticket. I have referred it to the "
         "specialist team that handles it, and they will contact you directly. "
         "I have not made any decision about your account and I am not able to "
         "give you a reason here."
+    ),
+    # Used when an approved write has already run. The standard escalation text
+    # says no decision was made about the account, which is then false.
+    "escalate_after_action": (
+        "I am not able to discuss the rest of this on the ticket. I have referred "
+        "it to the specialist team that handles it, and they will contact you "
+        "directly."
     ),
     "refuse": (
         "This falls outside what I am able to advise on. I have set out below "
@@ -55,6 +80,13 @@ SAFE_RESPONSES = {
     ),
 }
 
+# What the customer is told about a write that actually ran. Worded to stay true
+# when the card was already blocked and the tool changed nothing.
+ACTION_NOTICES = {
+    "block_card": "Your card is now blocked and can no longer be used.",
+}
+GENERIC_ACTION_NOTICE = "I have completed the change you asked for on your account."
+
 
 class TicketState(TypedDict, total=False):
     subject: str
@@ -62,6 +94,9 @@ class TicketState(TypedDict, total=False):
     account_id: str
     category: str
     route: str
+    # Triage's own decision. `route` is rewritten by n_finalise when the verifier
+    # blocks, so scoring it alone would blame triage for the verifier's strictness.
+    triage_route: str
     force_docs: list[str]
     injection_flag: bool
     injection_labels: list[str]
@@ -70,6 +105,8 @@ class TicketState(TypedDict, total=False):
     citations: list[str]
     tool_calls: list[str]
     tool_results: list[str]
+    # Customer-facing notices for write tools that actually ran.
+    actions_taken: list[str]
     approved: bool | None
     draft: str
     verdict: dict
@@ -83,6 +120,47 @@ def _read(name: str) -> str:
     return path.read_text() if path.exists() else ""
 
 
+def _chunk_index(chunk_id: str) -> int:
+    """Position within its document: `KB-ESC-009#3-1003e9ac` -> 3."""
+    try:
+        return int(chunk_id.split("#", 1)[1].split("-", 1)[0])
+    except (IndexError, ValueError):
+        return 0
+
+
+def _triage_matrix(records) -> str:
+    """Render the matrix's decision sections for the triage prompt.
+
+    Loaded from the store rather than copied into triage.md, so the matrix stays
+    the single source of truth and a governance edit reaches triage on re-ingest.
+
+    The first real-model run escalated fee, dispute and account-data questions
+    because triage was told to escalate what "must not be answered" and never
+    shown what that meant. So a store that has the matrix but lacks one of these
+    sections refuses to build an agent: routing without them is the failure, and
+    it is quieter than an error. A store with no matrix at all builds normally.
+    """
+    chunks = sorted((r for r in records if r.doc_id == GOVERNANCE_DOC),
+                    key=lambda r: _chunk_index(r.chunk_id))
+    if not chunks:
+        return ""
+
+    by_heading: dict[str, list[str]] = {}
+    for chunk in chunks:
+        by_heading.setdefault(chunk.heading_path, []).append(chunk.text.strip())
+
+    missing = [h for h in TRIAGE_MATRIX_SECTIONS if h not in by_heading]
+    if missing:
+        raise ValueError(
+            f"{GOVERNANCE_DOC} is in the store but has no section for {missing}. "
+            "Triage routes on these sections; building an agent without them "
+            "reintroduces the over-escalation they exist to prevent."
+        )
+
+    sections = [f"### {h}\n\n" + "\n\n".join(by_heading[h]) for h in TRIAGE_MATRIX_SECTIONS]
+    return "\n\n## Escalation and routing matrix\n\n" + "\n\n".join(sections) + "\n"
+
+
 class KestrelAgent:
     def __init__(self, retriever: HybridRetriever, llm: LLM | None = None,
                  k: int = 6, require_approval: bool = True):
@@ -91,7 +169,7 @@ class KestrelAgent:
         self.k = k
         self.require_approval = require_approval
         self.prompts = {
-            "triage": _read("triage.md"),
+            "triage": _read("triage.md") + _triage_matrix(retriever.all_records),
             "answer": _read("answer.md"),
             "verify": _read("verifier.md"),
         }
@@ -117,8 +195,8 @@ class KestrelAgent:
         # An injection attempt is flagged but does not by itself change the
         # route: the legitimate request underneath still deserves service.
         # Governance rules are pulled in so the answer layer sees them.
-        if verdict.flagged and "KB-ESC-009" not in force:
-            force.append("KB-ESC-009")
+        if verdict.flagged and GOVERNANCE_DOC not in force:
+            force.append(GOVERNANCE_DOC)
 
         trace = [f"triage: category={decision.category} route={decision.route} "
                  f"injection={verdict.flagged} force={force or '-'}"]
@@ -129,6 +207,7 @@ class KestrelAgent:
         return {
             "category": decision.category,
             "route": decision.route,
+            "triage_route": decision.route,
             "force_docs": force,
             "injection_flag": verdict.flagged,
             "injection_labels": verdict.labels,
@@ -155,7 +234,7 @@ class KestrelAgent:
 
     def n_tools(self, state: TicketState) -> dict:
         account = state.get("account_id") or toolkit.DEFAULT_ACCOUNT
-        results, trace = [], []
+        results, actions, trace = [], [], []
 
         for name in state.get("tool_calls") or []:
             if name in toolkit.WRITE_TOOLS and self.require_approval:
@@ -180,7 +259,12 @@ class KestrelAgent:
             results.append(result.render())
             trace.append(f"tools: {name} ok={result.ok}")
 
-        return {"tool_results": results, "trace": trace}
+            # A write that ran changed the account. Whatever the route ends up
+            # being, the customer has to be told.
+            if name in toolkit.WRITE_TOOLS and result.ok:
+                actions.append(ACTION_NOTICES.get(name, GENERIC_ACTION_NOTICE))
+
+        return {"tool_results": results, "actions_taken": actions, "trace": trace}
 
     def n_answer(self, state: TicketState) -> dict:
         parts = [state.get("context", "")]
@@ -195,8 +279,14 @@ class KestrelAgent:
                 "trace": [f"answer: drafted {len(resp.text)} chars"]}
 
     def n_verify(self, state: TicketState) -> dict:
+        # The verifier is asked to block a draft that obeys an instruction in the
+        # ticket, or answers a ticket that needed escalating. It can only judge
+        # that against the ticket itself — sent in the same untrusted envelope the
+        # other nodes use, so it arrives as data rather than instruction.
+        ticket = injection.wrap_untrusted(state.get("subject", ""), state.get("body", ""))
         payload = (f"--- context ---\n{state.get('context','')}\n\n"
-                   f"--- draft ---\n{state.get('draft','')}")
+                   f"--- draft ---\n{state.get('draft','')}\n\n"
+                   f"--- ticket ---\n{ticket}")
         resp = self.llm.complete(self.prompts["verify"], payload, task="verify")
 
         # The last gate before a customer sees the text, so the one thing it must
@@ -225,10 +315,23 @@ class KestrelAgent:
         # contracts.py. Sending an unrevised draft the verifier just flagged is
         # the one option that is not defensible.
         if route in TERMINAL_ROUTES or verdict in BLOCKING_VERDICTS:
-            reply = SAFE_RESPONSES.get(route, SAFE_RESPONSES["escalate"])
+            final_route = route if route in TERMINAL_ROUTES else "escalate"
             note = (f"{verdict} by verifier"
                     if verdict in BLOCKING_VERDICTS and route == "answer" else route)
-            return {"reply": reply, "route": route if route in TERMINAL_ROUTES else "escalate",
+
+            # An approved write already ran. The draft that would have mentioned
+            # it is being discarded, so the safe response carries it instead —
+            # and must not use the escalation text that says no decision was made.
+            actions = state.get("actions_taken") or []
+            if actions:
+                body = SAFE_RESPONSES["escalate_after_action" if final_route == "escalate"
+                                      else final_route]
+                reply = " ".join(actions) + " " + body
+                note += f", after {len(actions)} completed action(s)"
+            else:
+                reply = SAFE_RESPONSES[final_route]
+
+            return {"reply": reply, "route": final_route,
                     "trace": [f"finalise: safe response ({note})"]}
 
         reply = state.get("draft", "")

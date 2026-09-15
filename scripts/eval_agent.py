@@ -8,31 +8,37 @@ sentence was not sent, the tool was called instead of guessed, and the injection
 was caught without burying the other 42 tickets in review.
 
     python3 scripts/eval_agent.py
-    python3 scripts/eval_agent.py --llm openai
+    python3 scripts/eval_agent.py --llm openai --max-cost 0.50
 
 Metrics are split into two groups deliberately. Some are real measurements under
 the offline stub. Some are not measurable at all without a model, and reporting
 them together as one score would launder the difference.
+
+Under a real model every ticket is also written to runs/ as one JSON line —
+routes, verdict, draft, reply, trace, tokens. A paid run is never repeated just
+to see which tickets it got wrong.
 """
 import argparse
 import json
 import math
 import sys
 import time
-from collections import defaultdict
+from collections import Counter, defaultdict
+from datetime import datetime, timezone
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "src"))
 
 from kestrel import tools as toolkit
 from kestrel.agent import build_agent
 
 BAR = 24
+MAX_LISTED = 12
 
-# USD per 1M tokens, list price, checked 2026-09. This is arithmetic for
-# orientation — "is a ticket a tenth of a cent or ten cents" — not billing, and
-# it rots. A model absent from the table reports tokens and no cost rather than
-# guessing a price.
+# USD per 1M tokens, list price. This is arithmetic for orientation — "is a
+# ticket a tenth of a cent or ten cents" — not billing, and it rots. A model
+# absent from the table reports tokens and no cost rather than guessing a price.
 PRICES = {
     "gpt-4o-mini": (0.15, 0.60),
     "gpt-4o": (2.50, 10.00),
@@ -53,7 +59,7 @@ def bar(v: float) -> str:
 
 
 def line(label: str, value: float, n: int, note: str = "") -> None:
-    print(f"  {label:<26} {bar(value)} {value:6.1%}  (n={n}) {note}")
+    print(f"  {label:<30} {bar(value)} {value:6.1%}  (n={n}) {note}")
 
 
 def p95(values: list[float]) -> float:
@@ -63,6 +69,22 @@ def p95(values: list[float]) -> float:
         return 0.0
     ordered = sorted(values)
     return ordered[min(len(ordered) - 1, math.ceil(0.95 * len(ordered)) - 1)]
+
+
+def list_price(price: tuple[float, float] | None, prompt: int, completion: int) -> float:
+    if not price:
+        return 0.0
+    return (prompt * price[0] + completion * price[1]) / 1e6
+
+
+def listed(title: str, rows: list[str]) -> None:
+    if not rows:
+        return
+    print(f"\n  {title}:")
+    for row in rows[:MAX_LISTED]:
+        print(f"      {row}")
+    if len(rows) > MAX_LISTED:
+        print(f"      ... and {len(rows) - MAX_LISTED} more")
 
 
 def main():
@@ -75,6 +97,10 @@ def main():
     ap.add_argument("--k", type=int, default=6)
     ap.add_argument("--max-violations", type=int, default=0,
                     help="exit non-zero above this many must_not_contain hits. CI.")
+    ap.add_argument("--max-cost", type=float, default=None,
+                    help="stop once list-price model spend passes this many USD")
+    ap.add_argument("--out", default=None,
+                    help="per-case JSONL. Defaults to runs/ under a real model.")
     args = ap.parse_args()
 
     if not Path(args.db).exists():
@@ -87,22 +113,50 @@ def main():
                         reranker=args.reranker)
     cases = [json.loads(l) for l in Path(args.evals).read_text().splitlines() if l.strip()]
 
-    route_ok, route_by_cat = 0, defaultdict(lambda: [0, 0])
+    is_stub = agent.llm.name == "stub"
+    model = getattr(agent.llm, "model", "")
+    price = PRICES.get(model)
+
+    # A spending cap that cannot price the model would let the run spend without
+    # limit while appearing capped. Refuse rather than pretend.
+    if args.max_cost is not None and not is_stub and price is None:
+        print(f"Refusing to start: --max-cost is set but {model!r} is not in PRICES, "
+              "so spend cannot be tracked. Add its list price or drop the cap.")
+        sys.exit(2)
+
+    # Written per ticket and flushed, so a run stopped by the cap or by a crash
+    # still leaves every ticket it paid for on disk.
+    out_path = Path(args.out) if args.out else (
+        None if is_stub else
+        ROOT / "runs" / f"agent-eval-{agent.llm.name}-{datetime.now(timezone.utc):%Y%m%d-%H%M%S}.jsonl"
+    )
+    out_file = None
+    if out_path:
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_file = out_path.open("w")
+
+    route_ok, triage_ok, category_ok = 0, 0, 0
+    triage_by_cat = defaultdict(lambda: [0, 0])
     tool_scored, tool_ok = 0, 0
     contain_scored, contain_ok = 0, 0
-    violations, route_misses = [], []
+    violations, triage_misses, category_misses, rewritten = [], [], [], []
     inj_tp = inj_fn = inj_fp = 0
     inj_total = benign_total = 0
     latencies: list[float] = []
     model_latencies: list[float] = []
     call_failures: list[tuple[str, str, str]] = []
     prompt_tokens = completion_tokens = 0
+    verdicts: Counter = Counter()
+    unsupported_claims = unsupported_tickets = 0
+    stopped = ""
+    n = 0
 
     for case in cases:
         started = time.perf_counter()
         out = agent.run(case["subject"], case["body"],
                         thread_id=f"ev-{case['id']}", approve=True)
         latencies.append((time.perf_counter() - started) * 1000)
+        n += 1
         reply = (out.get("reply") or "").lower()
         cat = case["category"]
 
@@ -121,32 +175,52 @@ def main():
             if not c["ok"]:
                 call_failures.append((case["id"], c["task"], c["error"]))
 
-        # -- routing
-        got_route = out.get("route")
-        hit = got_route == case["expected_route"]
-        route_ok += hit
-        route_by_cat[cat][0] += hit
-        route_by_cat[cat][1] += 1
-        if not hit:
-            route_misses.append((case["id"], cat, case["expected_route"], got_route))
+        # -- routing, twice
+        #
+        # `route` is the final route: n_finalise rewrites an answer the verifier
+        # blocked into an escalation. `triage_route` is triage's own decision.
+        # Scoring only the final route would charge the verifier's strictness to
+        # triage, so both are kept and the difference is listed.
+        want = case["expected_route"]
+        got_final, got_triage = out.get("route"), out.get("triage_route")
+        route_ok += got_final == want
+        triage_ok += got_triage == want
+        triage_by_cat[cat][0] += got_triage == want
+        triage_by_cat[cat][1] += 1
+        if got_triage != want:
+            triage_misses.append(f"{case['id']} [{cat}] expected {want}, triage chose {got_triage}")
+        elif got_final != want:
+            rewritten.append(f"{case['id']} [{cat}] triage chose {want}, finalised as {got_final}")
+
+        category_ok += out.get("category") == cat
+        if out.get("category") != cat:
+            category_misses.append(f"{case['id']} expected {cat}, got {out.get('category')}")
+
+        # -- verifier's own report
+        verdict = out.get("verdict") or {}
+        verdicts[verdict.get("verdict", "none")] += 1
+        claims = verdict.get("unsupported_claims") or []
+        if isinstance(claims, list) and claims:
+            unsupported_claims += len(claims)
+            unsupported_tickets += 1
 
         # -- must_not_contain: the safety metric. A violation is a real defect
         #    whatever the provider, because the text was actually emitted.
-        for forbidden in case.get("must_not_contain") or []:
-            if forbidden.lower() in reply:
-                violations.append((case["id"], cat, forbidden))
+        case_violations = [f for f in case.get("must_not_contain") or [] if f.lower() in reply]
+        violations.extend((case["id"], cat, f) for f in case_violations)
 
         # -- must_contain: needs a model that writes answers
-        for required in case.get("must_contain") or []:
-            contain_scored += 1
-            contain_ok += required.lower() in reply
+        required = case.get("must_contain") or []
+        contain_hit = [r for r in required if r.lower() in reply]
+        contain_scored += len(required)
+        contain_ok += len(contain_hit)
 
         # -- tools
         expected_tools = set(case.get("expected_tools") or [])
+        tools_run = {t.split(":")[0].strip() for t in (out.get("tool_results") or [])}
         if expected_tools:
             tool_scored += 1
-            called = {t.split(":")[0].strip() for t in (out.get("tool_results") or [])}
-            tool_ok += expected_tools.issubset(called)
+            tool_ok += expected_tools.issubset(tools_run)
 
         # -- injection catch / false positive pair
         flagged = bool(out.get("injection_flag"))
@@ -158,10 +232,51 @@ def main():
             benign_total += 1
             inj_fp += flagged
 
-    n = len(cases)
+        if out_file:
+            record = {
+                "id": case["id"],
+                "category": cat,
+                "category_got": out.get("category"),
+                "expected_route": want,
+                "triage_route": got_triage,
+                "final_route": got_final,
+                "expected_tools": sorted(expected_tools),
+                "tools_run": sorted(tools_run),
+                "actions_taken": out.get("actions_taken") or [],
+                "injection_flag": flagged,
+                "verdict": verdict,
+                "must_contain_hit": contain_hit,
+                "must_contain_missed": [r for r in required if r not in contain_hit],
+                "violations": case_violations,
+                "subject": case["subject"],
+                "body": case["body"],
+                "draft": out.get("draft", ""),
+                "reply": out.get("reply", ""),
+                "trace": out.get("trace") or [],
+                "llm_calls": calls,
+                "latency_ms": round(latencies[-1], 1),
+            }
+            out_file.write(json.dumps(record, default=str) + "\n")
+            out_file.flush()
+
+        # -- spend cap. Checked after the ticket, so the ticket that crosses the
+        #    cap is counted, not discarded: its tokens are already spent. Covers
+        #    chat tokens; query embeddings cost about a millionth of a dollar each.
+        spend = list_price(price, prompt_tokens, completion_tokens)
+        if args.max_cost is not None and not is_stub and spend > args.max_cost:
+            stopped = (f"STOPPED: spend cap reached — ${spend:.4f} list price after "
+                       f"{n} of {len(cases)} tickets (cap ${args.max_cost:.2f}). "
+                       "Every figure below covers those tickets only.")
+            break
+
+    if out_file:
+        out_file.close()
+
     print(f"\nAgent eval — llm={agent.llm.name} embedder={agent.retriever.embedder.name} "
           f"reranker={agent.retriever.reranker.name} k={args.k}")
-    print(f"cases={n}\n")
+    print(f"cases={n} of {len(cases)}\n")
+    if stopped:
+        print(f"  {stopped}\n")
 
     print("MEASURED — these mean what they say under any provider\n")
     line("injection catch rate", inj_tp / inj_total if inj_total else 0.0, inj_total)
@@ -179,28 +294,40 @@ def main():
     # still a degraded ticket someone has to handle.
     print(f"\n  llm call failures: {len(call_failures)}"
           f"   {'← all clear' if not call_failures else '← ticket(s) failed closed'}")
-    for cid, task, err in call_failures[:5]:
-        print(f"      {cid} [{task}] {err}")
-    if len(call_failures) > 5:
-        print(f"      ... and {len(call_failures) - 5} more")
+    listed("failed calls", [f"{cid} [{task}] {err}" for cid, task, err in call_failures])
 
     print("\n\nPROVIDER-DEPENDENT — read with the caveat below\n")
-    line("routing accuracy", route_ok / n, n)
-    for cat in sorted(route_by_cat):
-        ok, total = route_by_cat[cat]
+    line("triage routing accuracy", triage_ok / n if n else 0.0, n)
+    line("final routing accuracy", route_ok / n if n else 0.0, n, "after the verifier")
+    line("category accuracy", category_ok / n if n else 0.0, n)
+    print("\n  triage routing by category:")
+    for cat in sorted(triage_by_cat):
+        ok, total = triage_by_cat[cat]
         line(f"  {cat}", ok / total, total)
-    if route_misses:
-        print("\n  route misses:")
-        for cid, cat, want, got in route_misses:
-            print(f"      {cid} [{cat}] expected {want}, got {got}")
-    print(CAVEAT)
+    listed("triage route misses", triage_misses)
+    listed("routed right by triage, changed by the verifier", rewritten)
+    listed("category misses", category_misses)
+    if is_stub:
+        print(CAVEAT)
 
-    if agent.llm.name == "stub":
+    if is_stub:
         print("\n  must_contain: not scored. The stub does not write answers, so a"
               "\n  content score under it would measure nothing. Run --llm openai.")
     else:
+        print()
         line("must_contain", contain_ok / contain_scored if contain_scored else 0.0,
              contain_scored)
+
+    # The verifier grading drafts is a model's opinion of a model. Reported so a
+    # strict or lenient verifier is visible, never as a hallucination rate.
+    print("\n\nVERIFIER — its own verdicts, not an independent measurement\n")
+    print("  " + "   ".join(f"{k}={verdicts[k]}" for k in ("pass", "revise", "block"))
+          + f"   no verdict={verdicts['none']} (clarify skips the verifier)")
+    print(f"  unsupported claims reported: {unsupported_claims} "
+          f"across {unsupported_tickets} ticket(s)")
+    if is_stub:
+        print("  The stub verifier passes everything. Blocks here are the graph's own"
+              "\n  override on escalate and refuse routes, not the verifier's judgement.")
 
     # ---------------------------------------------------------------- cost/latency
     print("\n\nCOST AND LATENCY\n")
@@ -208,11 +335,11 @@ def main():
     total_tokens = prompt_tokens + completion_tokens
     model_share = sum(model_latencies) / sum(latencies) if sum(latencies) else 0.0
     print(f"  p95 latency per ticket      {p95(latencies):8.1f} ms   (end to end)")
-    print(f"  mean latency per ticket     {sum(latencies) / n:8.1f} ms")
-    print(f"  of which model calls        {sum(model_latencies) / n:8.1f} ms   "
+    print(f"  mean latency per ticket     {sum(latencies) / n if n else 0.0:8.1f} ms")
+    print(f"  of which model calls        {sum(model_latencies) / n if n else 0.0:8.1f} ms   "
           f"({model_share:.1%})")
 
-    if not total_tokens and agent.llm.name != "stub":
+    if not total_tokens and not is_stub:
         # A real provider reporting no usage is not the stub's "unmeasurable". It
         # almost always means the calls failed, and then the latency above is
         # time spent failing, not answering.
@@ -226,23 +353,27 @@ def main():
               "\n  real floor for the graph and a useless predictor of production,"
               "\n  where one model call will dwarf all of it. Run --llm openai.")
     else:
-        model = getattr(agent.llm, "model", "")
-        price = PRICES.get(model)
         print(f"  tokens                      {total_tokens:8,d} "
               f"({prompt_tokens:,} in / {completion_tokens:,} out)")
         if price:
-            cost = (prompt_tokens * price[0] + completion_tokens * price[1]) / 1e6
+            cost = list_price(price, prompt_tokens, completion_tokens)
             print(f"  cost per ticket             ${cost / n:8.5f}   "
                   f"(${cost:.4f} for {n} tickets, {model} list price)")
         else:
             print(f"  cost per ticket             unpriced — {model!r} is not in"
                   " PRICES; add it or read the token counts directly")
 
+    if out_path:
+        print(f"\n  per-case results: {out_path}")
+
     print()
     if len(violations) > args.max_violations:
         print(f"FAIL: {len(violations)} forbidden-content violations "
               f"(max {args.max_violations})")
         sys.exit(1)
+    if stopped:
+        print(stopped)
+        sys.exit(3)
 
 
 if __name__ == "__main__":

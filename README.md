@@ -26,7 +26,8 @@ python3 scripts/eval_retrieval.py --db kestrel.db --k 6
 Runs with no credentials and no infrastructure. The default embedder is a
 deterministic hash projection and the default LLM is a keyword stub, so tests
 and CI are free and reproducible. See [Running against OpenAI](#running-against-openai)
-for the real providers.
+for the real providers, and [Running with a real model](#running-with-a-real-model)
+for what they measured.
 
 Ingest before evaluating — the eval reads the database, it does not build it.
 Annotations are kept out of the command lines above on purpose: zsh does not
@@ -47,6 +48,32 @@ pip3 install onnxruntime tokenizers huggingface-hub
 python3 scripts/eval_retrieval.py --db kestrel.db --k 6 --reranker cross-encoder
 ```
 
+### Try it yourself
+
+Run any ticket you write, offline and free. The account tools are fixtures, so
+nothing real is touched:
+
+```bash
+python3 scripts/run_agent.py --subject "Fee question" --body "What is the monthly fee on Kestrel Plus?"
+python3 scripts/run_agent.py --subject "Card stolen" --body "My wallet was stolen. Please block my card."
+```
+
+The output shows every step: the route triage chose, the chunks retrieved, any
+tool call, the verifier's verdict and notes, and the reply. When the verifier
+holds a draft back, that draft is printed too, marked as not sent, so a blocked
+answer is never a mystery. An irreversible write stops for approval, and can be
+approved or declined:
+
+```bash
+python3 scripts/run_agent.py --scenario 5
+python3 scripts/run_agent.py --scenario 5 --approve
+python3 scripts/run_agent.py --scenario 5 --deny
+```
+
+Scenarios 1–5 are the built-in demo tickets. Once the setup below is done, add
+`--db kestrel-openai.db --provider openai --llm openai` to any of these to use the
+real model, at under a tenth of a cent a ticket.
+
 ### Running against OpenAI
 
 One key covers both embeddings and the agent's model. A separate database keeps
@@ -58,7 +85,7 @@ export EMBEDDING_PROVIDER=openai
 export LLM_PROVIDER=openai
 python3 scripts/ingest.py --kb kb --db kestrel-openai.db
 python3 scripts/eval_retrieval.py --db kestrel-openai.db --k 6
-python3 scripts/eval_agent.py --db kestrel-openai.db --max-violations 0
+python3 scripts/eval_agent.py --db kestrel-openai.db --max-violations 0 --max-cost 0.50
 ```
 
 Unset the three variables to go back to the offline path.
@@ -66,15 +93,19 @@ Unset the three variables to go back to the offline path.
 - A store queried with a different embedder from the one that built it is refused
   with an error naming both. Re-ingesting an existing store with a new embedder
   re-embeds all of it, and the report says so.
+- `--max-cost` stops the agent eval once list-price spend passes the cap, keeping
+  the tickets already run, and refuses to start on a model it cannot price.
+- Under a real model the eval writes every ticket — routes, verdict, draft, reply,
+  trace, tokens — to `runs/` as one JSON line, so a paid run never has to be
+  repeated just to see what it got wrong.
 - `LLM_MODEL` (default `gpt-4o-mini`), `LLM_TIMEOUT` (default 30s) and
   `LLM_MAX_RETRIES` (default 2) tune the client. A call that still fails escalates
   its ticket instead of crashing the run.
 - `429 insufficient_quota` means the key is valid and the account has no credits.
   Listing models is free, so it is not a billing check. A failed ingest writes no
   vectors and no fingerprint; add credits and re-run it.
-- Cost is small: embedding the whole corpus is a fraction of a cent, and a full
-  48-case agent eval is estimated at under ten US cents on `gpt-4o-mini`. The eval
-  prints the real token count and list-price cost when it runs.
+- Measured cost: embedding the whole corpus is a fraction of a cent, and a full
+  48-case agent eval on `gpt-4o-mini` comes to about $0.03 at list price.
 
 ## What's here now
 
@@ -86,7 +117,7 @@ src/kestrel/ chunking, BM25, embeddings, embedder-aware vector store,
              hybrid retrieval, cross-encoder reranking, LLM providers,
              model-output contracts, injection filter, mock tools, agent graph
 scripts/     ingest, retrieval eval, agent eval, single-ticket runner, query tool
-tests/       74 tests — table integrity, ingestion, retrieval modes, reranking,
+tests/       81 tests — table integrity, ingestion, retrieval modes, reranking,
              fail-closed model contracts, agent safety
 ```
 
@@ -121,10 +152,12 @@ Both remaining misses are the same failure: `KB-CMP-008` (complaints and ombud)
 not retrieved on `KM-06` and `RS-01`, where the customer describes a situation —
 a declined dispute, a request for a product recommendation — without using any
 of that document's vocabulary. This is precisely where a semantically blind
-embedder loses. The cross-encoder reranker below now recovers one of the two;
-the case it does not recover turns out to be the more interesting one.
+embedder loses. Offline, the cross-encoder reranker below recovers one of the
+two; with semantic embeddings, fusion recovers the same one without it.
 
-## Does the fusion earn its place? Offline, no.
+## Does the fusion earn its place?
+
+### Offline, no
 
 `--mode` isolates each retriever, so RRF can be measured against its own parts
 instead of asserted:
@@ -149,30 +182,50 @@ no length normalisation — it is a strictly weaker *lexical* matcher, not a
 semantic one. RRF's premise is that its inputs fail independently; two lexical
 retrievers fail together, so fusing them recovers nothing.
 
-So the architectural argument for RRF stands on its reasoning, not on these
-numbers, and the numbers should not be cited as if they supported it. The claim
-becomes testable only under `EMBEDDING_PROVIDER=openai`, where the dense side is
-actually semantic. Until someone runs that, "hybrid retrieval" here means
-"BM25, with a dense retriever attached that is not contributing."
+### With semantic embeddings, by one case
 
-## The reranker: one of two misses, at 400x the latency
+The same comparison with `text-embedding-3-small`, where the dense side actually
+understands the query:
 
-Both standing misses were the same failure — `KB-CMP-008` not retrieved where
-the customer describes a situation and the policy names a process. That is the
-gap a cross-encoder is supposed to close, so it is a fair test rather than a
+| Category | lexical | dense | hybrid |
+|---|---|---|---|
+| kb_direct | 100% | 100% | 100% |
+| kb_multihop | 91.7% | 91.7% | 91.7% |
+| tool_required | 100% | 100% | 100% |
+| escalate_mandatory | 100% | 100% | 100% |
+| injection | 100% | 100% | 100% |
+| trap | 100% | 100% | 100% |
+| refuse_scope | 87.5% | 87.5% | **100%** |
+| **Overall** | **97.8%** | **97.8%** | **98.9%** |
+
+**Hybrid now beats both of its parts.** Dense climbs to BM25's level, and fusion
+goes one case past both. That case is RS-01: neither retriever places
+`KB-CMP-008` inside the top six on its own, but fusing the two rankings lifts it
+over the cut-off — a document placed moderately in two independent lists
+outranks one placed highly in only one, which is exactly what rank fusion is for.
+
+It is one case out of 45. The architectural argument for RRF is now supported by
+a measurement rather than resting on reasoning alone; it is not proven by one.
+KM-06 is still missed by all three.
+
+## The reranker: it helped a weak retriever and hurts a good one
+
+Both standing offline misses were the same failure — `KB-CMP-008` not retrieved
+where the customer describes a situation and the policy names a process. That is
+the gap a cross-encoder is supposed to close, so it was a fair test rather than a
 feature looking for a use.
 
 `--reranker cross-encoder` reorders the 20-candidate pool with MiniLM
 (`ms-marco-MiniLM-L-6-v2`) before truncating to k:
 
-| | recall@6 | misses |
+| Retrieval underneath | noop | cross-encoder |
 |---|---|---|
-| noop (default) | 97.8% | KM-06, RS-01 |
-| cross-encoder | **98.9%** | KM-06 |
+| Hash embedder (offline) | 97.8% | **98.9%** — recovers RS-01 |
+| OpenAI embeddings | **98.9%** | 96.7% — loses RS-01, and `KB-AML-007` on EM-05 |
 
-RS-01 is fixed and `refuse_scope` goes 87.5% → 100%. That is one case out of 45,
-and it should be read as one case, not as a percentage point: at n=45 a single
-ticket is 2.2% of the score.
+**Offline, it recovers one case.** RS-01 is fixed and `refuse_scope` goes 87.5% →
+100%. That is one case out of 45, and it should be read as one case: at n=45 a
+single ticket is 2.2% of the score.
 
 **KM-06 still fails, and the reason is worth reading.** It is not a candidate
 pool problem — the target is in the pool. The cross-encoder simply scores it
@@ -194,6 +247,12 @@ domain procedure, not semantic similarity, and ms-marco was trained on web
 search relevance. A reranker moves documents that are *about* the query. It does
 not know what a customer is entitled to do next.
 
+**On top of semantic retrieval, it makes things worse.** Over the OpenAI hybrid,
+the cross-encoder takes recall from 98.9% down to 96.7%. Its offline gain was
+compensating for a semantically blind embedder. Given a retriever that already
+understands the query, a reranker trained on web search relevance reorders away
+from the policy that actually answers it.
+
 **The price.** On this corpus, per query:
 
 | | latency |
@@ -201,18 +260,15 @@ not know what a customer is entitled to do next.
 | noop | 1.2 ms |
 | cross-encoder | 475.8 ms |
 
-400x, on CPU, for one recovered case. Defensible in a support agent where a
-model call costs a second anyway and a wrong answer costs a complaint — the
-reranker is then ~15% of the ticket rather than 99% of retrieval. Not defensible
-as a default, which is why `NoopReranker` still is one, and why CI never
-downloads a model.
+400x, on CPU. Against a measured 4.1-second ticket that would be about 12% —
+affordable, if it helped. With semantic retrieval it does not, so `NoopReranker`
+stays the default, CI never downloads a model, and on this corpus the reranker is
+not worth enabling at all.
 
-Two caveats on the numbers above. The customer-facing corpus is 33 chunks across
-8 documents, so a 20-candidate pool is roughly 60% of everything there is —
-reranking that is a far easier problem than reranking 20 of 200 000, and these
-figures should not be read as production ones. And the dense retriever underneath
-is still the hash embedder, so the reranker is being measured on top of a
-BM25-dominant ordering rather than a semantic one.
+One caveat on all of the retrieval numbers. The customer-facing corpus is 33
+chunks across 8 documents, so a 20-candidate pool is roughly 60% of everything
+there is. Ranking that is a far easier problem than ranking 20 of 200 000, and
+these figures should not be read as production ones.
 
 ## Design decisions worth defending
 
@@ -230,7 +286,8 @@ numeric and identifier matching is where dense retrieval is weakest.
 
 **Governance documents are excluded from the answer pool.** The escalation
 matrix is `customer_facing: false` and enters retrieval only when triage
-requests it via `force_docs`. See below for why.
+requests it via `force_docs`. Triage itself reads the matrix's decision sections
+directly — see [Running with a real model](#running-with-a-real-model) for why.
 
 **Content-hash incremental ingestion.** Re-embedding an unchanged corpus costs
 nothing; editing one document re-embeds only its changed chunks. A hash only
@@ -283,7 +340,7 @@ Four structural guarantees, each with a test:
 | Guarantee | Enforced by |
 |---|---|
 | A mandatory escalation never produces a customer-facing answer | `verify` vetoes any draft on a terminal route |
-| An irreversible write never runs unapproved | `block_card` calls `interrupt()`; the graph suspends |
+| An irreversible write never runs unapproved, and is stated in the reply once it has | `block_card` calls `interrupt()`; an executed write adds its own notice |
 | A flagged injection does not deny service | the attack is flagged, the real question still answered |
 | A model that fails, or returns a route outside the allowed set, escalates rather than answers | `contracts.parse_triage` / `parse_verdict` fail closed |
 
@@ -306,9 +363,8 @@ exactly the malformed payloads a real model produces. It has since held against
 a real provider too. Pointed at an OpenAI account with no credits, every call
 returned `429 insufficient_quota`; triage degraded and failed closed to
 `escalate`, the verifier blocked, and the customer received the safe escalation
-reply — not a stack trace, and not an answer. That proves the failure path
-against a live API. The success path, a model that actually answers well, is
-still unmeasured.
+reply — not a stack trace, and not an answer. The success path has been measured
+as well, [below](#running-with-a-real-model), and it is less flattering.
 
 ### What the offline numbers mean, and what they do not
 
@@ -326,20 +382,16 @@ The default `StubLLM` is about forty lines of regex. It does not reason. Its
 routing accuracy is measured against eval cases written by the same hand that
 wrote the rules, so the number largely reflects the author agreeing with
 themselves. It is worth printing because a *drop* signals a regression; the
-level means nothing. `LLM_PROVIDER=openai` makes it a real measurement.
+level means nothing. A real model scored 58.3% on the same cases, and 72.9% once
+triage could see the escalation criteria.
 
 It is weaker still than that. The metric scores `expected_route`, and four of
 the eight categories — `kb_direct`, `kb_multihop`, `trap`, and an answering
 `tool_required` — all collapse to the single route `answer`. So it distinguishes
-four outcomes, not eight. Run the demo scenarios and you can see it: scenarios 1,
-2 and 3 all report `category=kb_direct` when they are multihop, multihop and
-trap. The routes are right and the metric passes anyway.
-
-What the stub actually does is detect escalation, refusal and ambiguity, and
-default everything else to "answer". That is a useful safety skeleton and not a
-classifier. Scoring against `expected_category` rather than `expected_route`
-would make the number mean something — under a model that can learn the
-distinction.
+four outcomes, not eight. Scored against each case's `category` instead, the
+stub gets 60.4%: it detects escalation, refusal and ambiguity, and labels almost
+everything else `kb_direct`. That is a useful safety skeleton and not a
+classifier.
 
 ### The case the keyword router lost
 
@@ -360,6 +412,93 @@ patched because it is the clearest evidence in the project that the stub is
 scaffolding: the one case it failed was the one where failing matters most, and
 a longer regex is not the repair — a model is.
 
+`gpt-4o-mini` escalated EM-07 in both real runs below. In the first, the same
+model also escalated routine fee and dispute questions, so that 100% came cheap;
+in the second it held while over-escalation halved, which makes it mean more.
+
+### Running with a real model
+
+`gpt-4o-mini` behind the graph, OpenAI embeddings, all 48 cases. **Run 1** is the
+agent as it stood. **Run 2** follows one change made because of what run 1
+showed, and is reported beside it rather than in place of it.
+
+| Metric | n | Stub | Run 1 | Run 2 |
+|---|---|---|---|---|
+| Forbidden-content violations | 48 | 0 | **0** | **0** |
+| Injection catch rate / false positives | 6 / 42 | 100% / 0% | 100% / 0% | 100% / 0% |
+| LLM call failures | 48 | 0 | 0 | 0 |
+| Mandatory escalations that reached a human | 7 | 100% | **100%** | **100%** |
+| Answerable tickets actually answered | 32 | n/a | at most 10 | **15** |
+| Triage routing accuracy | 48 | 100% | 58.3% | **72.9%** |
+| Final routing accuracy, after the verifier | 48 | 100% | 47.9% | 60.4% |
+| Category accuracy | 48 | 60.4% | 45.8% | 52.1% |
+| Tool selection | 6 | 100% | 66.7% | 66.7% |
+| `must_contain` | 27 | not scored | 37.0% | 55.6% |
+| Cost at list price | 48 | — | $0.0311 | $0.0325 |
+| Latency per ticket, mean / p95 | 48 | 6 ms | 4.1 s / 5.8 s | 4.1 s / 6.0 s |
+
+The stub's routing column is the circular 100% explained above; only the real
+runs measure anything.
+
+**Run 1: safe, and mostly by being unhelpful.** Nothing forbidden was emitted,
+every injection was caught, and every mandatory escalation reached a human. But
+only 10 drafts passed the verifier, and only a passing draft is sent — so at most
+10 of the 32 answerable tickets received an answer. At least 12 of triage's 20
+misses were answerable questions sent to escalation: fee and limit questions,
+multihop policy questions, five of the six account-data tickets.
+
+**Why it over-escalated.** Triage was told to escalate tickets that "must not be
+answered at all", with one example. The actual criteria — seven
+mandatory-escalation triggers, four refusal triggers, and a list of topics the
+agent may answer fully — lived only in the escalation matrix, which is internal
+and never reached triage. The stub never needed them, because its regexes encoded
+them. It was the same gap as the tool names, which the prompt referenced without
+ever listing until the first real run.
+
+**The change between runs.** Triage now reads the matrix's decision sections from
+the same store the retriever uses, so the matrix stays the one source of truth
+and a governance edit reaches triage on re-ingest. *Confidence Routing* is left
+out: it depends on retrieval results triage has not seen yet, and "conflicting
+policies retrieved: escalate" would push triage the wrong way. An agent built on
+a store that holds the matrix but lacks one of those sections refuses to start.
+
+**Run 2: more useful, still safe, not yet good.** Triage routing rose from 58.3%
+to 72.9%, and answered tickets from at most 10 to 15 of 32. Mandatory escalation
+stayed at 7 of 7 and forbidden content at zero — the result that mattered most,
+because loosening escalation fails in the dangerous direction if it fails at all.
+What is left is specific:
+
+- **Account-data questions still escalate.** Tool selection did not move, and four
+  of the six `tool_required` tickets — which account am I on, where is my dispute,
+  an unknown charge, a stolen card — were escalated. The matrix lists the policy
+  topics an agent may answer, and nothing about questions a tool can answer from
+  the customer's own account.
+- **A new failure: asking instead of answering.** Four answerable tickets went to
+  `clarify`. Escalation misses fell from at least 12 to 6; some of that became
+  over-clarification rather than answers.
+- **The verifier now does the most damage.** Six tickets triage routed correctly
+  were blocked or sent back. One block was right: KD-03's draft told the customer
+  they were verified to Level 1 when the ticket said Level 2 — an invented account
+  fact, caught before it was sent. Others blocked correct answers as needing
+  escalation for reasons the matrix does not contain: a right fee-waiver answer
+  because the ticket also asked for a refund, a right 120-day dispute window
+  because the ticket carried an injection attempt. The verifier is told to block a
+  missed escalation and has never seen the matrix — the same gap triage had, one
+  node later.
+
+**A defect run 1 exposed, and its fix.** In the first run's demo, *"my wallet was
+stolen, please block my card"* was escalated, yet `block_card` still ran — the
+graph dispatches tools whatever the route — and after approval the customer was
+told *"I have not made any decision about your account."* An executed write now
+adds its own notice to the reply, and the escalation text no longer claims no
+decision was made; a declined write keeps the standard reply, which is then true.
+Run 2 did not exercise this with the real model: triage escalated the stolen-card
+ticket again but selected no tool, so nothing ran. The fix is covered by offline
+tests only.
+
+**Cost and latency.** About $0.03 per 48-ticket run at list price, roughly $0.0007
+a ticket. Mean 4.1 s and p95 6.0 s end to end, 90% of it model time — the offline
+6 ms was, as expected, no predictor at all.
 
 ## Retrieval traps in the corpus
 
@@ -390,18 +529,21 @@ The knowledge base is written to be hard on purpose:
 | `refuse_scope` | 4 | FAIS/tax/legal/third-party refusals |
 | `ambiguous_clarify` | 3 | Must ask, not guess |
 
-Each case carries `expected_route`, `expected_sources`, `expected_tools`, `must_contain`, and `must_not_contain`. `must_not_contain` is the important one — it catches the failure where the model says something true and forbidden.
+Each case carries `category`, `expected_route`, `expected_sources`, `expected_tools`, `must_contain`, and `must_not_contain`. `must_not_contain` is the important one — it catches the failure where the model says something true and forbidden.
 
 ## Metrics tracked
 
 Measured by `scripts/eval_retrieval.py` and `scripts/eval_agent.py`:
 
 - Retrieval recall@k against `expected_sources`
-- Routing accuracy vs `expected_route`
+- Triage routing accuracy vs `expected_route`, and final routing accuracy after
+  the verifier — reported separately, so verifier strictness is not charged to triage
+- Category accuracy against each case's `category`
 - Injection catch rate and false-positive rate on benign mail
 - Tool selection against `expected_tools`
 - Forbidden-content violations against `must_not_contain` — a CI gate
 - `must_contain` coverage — **only under a real model**; the stub writes no answers
+- Verifier verdict counts and the unsupported claims it reports
 - LLM call failures, and the tickets they failed closed
 - p95 and mean latency per ticket, measured end to end around the graph
 - Tokens and cost per ticket — **only under `LLM_PROVIDER=openai`**
@@ -409,16 +551,16 @@ Measured by `scripts/eval_retrieval.py` and `scripts/eval_agent.py`:
 The last two need reading carefully. Latency is real under any provider, but
 under the stub it is 6.2 ms of which the model is 2.8% — that is retrieval, BM25
 and the state machine, a genuine floor for the graph and a useless predictor of
-production, where one model call will dwarf all of it. Tokens and cost are not
+production, where one model call dwarfs all of it. Tokens and cost are not
 reported at all under the stub rather than reported as zero, because a zero
 there looks like a measurement and is not one. Cost is arithmetic off a
 list-price table in `scripts/eval_agent.py` that rots; a model missing from it
 prints token counts and no price rather than guessing.
 
-Not measured yet: **groundedness** (verifier-scored claims with a supporting
-span) and **hallucination rate** (unsupported figures per 100 replies). The
-verifier prompt already returns `unsupported_claims`, but nothing aggregates
-them, and under the stub there are no claims to score. Both wait on a real model.
+Not measured yet: **groundedness** (claims with a supporting span in the
+context) and **hallucination rate** (unsupported figures per 100 replies). The
+verifier reports unsupported claims, but that is one model grading another, and
+neither metric is worth quoting until something independent checks it.
 
 ## Roadmap
 
@@ -426,16 +568,21 @@ them, and under the stub there are no claims to score. Both wait on a real model
 - [x] Labelled eval set
 - [x] Triage / answer / verifier prompts
 - [x] Ingestion with content-hash incremental re-embedding, fingerprinted per embedder
-- [x] Hybrid retrieval (BM25 + dense) with RRF fusion
+- [x] Hybrid retrieval (BM25 + dense) with RRF fusion — beats its parts with semantic embeddings
 - [x] Retrieval eval + CI gate
 - [x] LangGraph state machine with interrupt-based human approval
 - [x] Mock banking tools with deterministic fixtures
 - [x] Eval runner + GitHub Actions gate
 - [x] Prompt-injection filter with a measured false-positive rate
 - [x] Fail-closed contract layer between model output and the graph
-- [x] Latency, token and cost instrumentation
-- [x] Cross-encoder reranking (opt-in; +1 case, 400x latency — see above)
-- [ ] A real LLM behind the graph (the OpenAI provider is wired, hardened, and has failed closed on a real 429; no model has answered through it yet)
-- [ ] Groundedness and hallucination-rate scoring (needs a real model)
+- [x] Latency, token and cost instrumentation, with a spending cap
+- [x] Cross-encoder reranking (opt-in; helps offline, hurts with semantic retrieval)
+- [x] A real LLM behind the graph (`gpt-4o-mini`, safe end to end)
+- [x] Triage reads the escalation matrix (triage routing 58.3% → 72.9%)
+- [x] An executed write is stated in the reply, even on an escalated ticket
+- [x] Per-ticket eval results, so a paid run is never repeated to inspect it
+- [ ] Give the verifier the matrix too — it blocks correct answers for escalation reasons the matrix does not contain
+- [ ] Tell triage that account-data questions are answered through tools (tool-backed tickets still mostly escalate)
+- [ ] Independent groundedness and hallucination-rate scoring
 - [ ] Verifier revise loop (`revise` currently blocks, same as `block`)
 - [ ] Trace-visible demo UI

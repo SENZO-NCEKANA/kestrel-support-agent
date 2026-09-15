@@ -112,10 +112,18 @@ def main():
             for line in r.splitlines():
                 print(f"  {line}")
 
-    print(f"\nROUTE    {out.get('route')}   (category {out.get('category')})")
-    verdict = (out.get("verdict") or {}).get("verdict")
-    if verdict:
-        print(f"VERIFY   {verdict}")
+    # When the verifier blocks, the final route becomes escalate. Show what
+    # triage decided too, or a blocked answer looks like a triage escalation.
+    triage = out.get("triage_route")
+    changed = f", triage chose {triage}" if triage and triage != out.get("route") else ""
+    print(f"\nROUTE    {out.get('route')}   (category {out.get('category')}{changed})")
+    verdict = out.get("verdict") or {}
+    if verdict.get("verdict"):
+        print(f"VERIFY   {verdict['verdict']}")
+        if verdict.get("notes"):
+            print(f"         notes: {verdict['notes']}")
+        for claim in verdict.get("unsupported_claims") or []:
+            print(f"         unsupported: {claim}")
 
     calls = out.get("llm_calls") or []
     if calls:
@@ -140,6 +148,15 @@ def main():
     print("\nREPLY")
     for line in (out.get("reply") or "").splitlines():
         print(f"  {line}")
+
+    # A draft that was not sent is the only way to see why a ticket triage meant
+    # to answer ended as an escalation. Console output for whoever is running
+    # the ticket, never part of the customer's reply.
+    draft = out.get("draft") or ""
+    if draft and not (out.get("reply") or "").startswith(draft):
+        print("\nDRAFT (not sent)")
+        for line in draft.splitlines():
+            print(f"  {line}")
     print()
 
 
