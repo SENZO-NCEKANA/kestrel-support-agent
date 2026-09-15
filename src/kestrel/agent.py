@@ -41,7 +41,7 @@ PROMPTS = Path(__file__).resolve().parents[2] / "prompts"
 TERMINAL_ROUTES = {"escalate", "refuse", "clarify"}
 
 # The internal escalation and routing matrix. It reaches the answer layer through
-# force_docs, and triage reads its decision sections directly.
+# force_docs, and triage and the verifier read its decision sections directly.
 GOVERNANCE_DOC = "KB-ESC-009"
 
 # The matrix sections triage routes on. Two are left out on purpose: Confidence
@@ -55,6 +55,15 @@ TRIAGE_MATRIX_SECTIONS = (
     "Mandatory Refusal, With Referral",
     "Topics an Agent May Answer Fully",
 )
+
+# The verifier blocks a "missed escalation", and in the second real run it blocked
+# correct answers for escalation reasons the matrix does not contain — it had
+# never been shown the matrix. It gets the same sections plus Untrusted Input,
+# because judging whether a draft obeyed an injection is its job, and that
+# section says an injection is flagged while the real request is still served.
+# Confidence Routing stays out here too: "partial support, escalate the rest"
+# adds escalation pressure, the opposite of this fix.
+VERIFIER_MATRIX_SECTIONS = TRIAGE_MATRIX_SECTIONS + ("Untrusted Input",)
 
 SAFE_RESPONSES = {
     "escalate": (
@@ -128,17 +137,20 @@ def _chunk_index(chunk_id: str) -> int:
         return 0
 
 
-def _triage_matrix(records) -> str:
-    """Render the matrix's decision sections for the triage prompt.
+def _matrix_prompt(records, sections: tuple[str, ...]) -> str:
+    """Render the named matrix sections for a node's system prompt.
 
-    Loaded from the store rather than copied into triage.md, so the matrix stays
-    the single source of truth and a governance edit reaches triage on re-ingest.
+    Loaded from the store rather than copied into a prompt file, so the matrix
+    stays the single source of truth and a governance edit reaches every node
+    that reads it on re-ingest.
 
     The first real-model run escalated fee, dispute and account-data questions
     because triage was told to escalate what "must not be answered" and never
-    shown what that meant. So a store that has the matrix but lacks one of these
-    sections refuses to build an agent: routing without them is the failure, and
-    it is quieter than an error. A store with no matrix at all builds normally.
+    shown what that meant; the second showed the verifier making the same mistake
+    one node later. So a store that has the matrix but lacks a required section
+    refuses to build an agent: judging escalation without the criteria is the
+    failure, and it is quieter than an error. A store with no matrix at all builds
+    normally.
     """
     chunks = sorted((r for r in records if r.doc_id == GOVERNANCE_DOC),
                     key=lambda r: _chunk_index(r.chunk_id))
@@ -149,16 +161,17 @@ def _triage_matrix(records) -> str:
     for chunk in chunks:
         by_heading.setdefault(chunk.heading_path, []).append(chunk.text.strip())
 
-    missing = [h for h in TRIAGE_MATRIX_SECTIONS if h not in by_heading]
+    missing = [h for h in sections if h not in by_heading]
     if missing:
         raise ValueError(
             f"{GOVERNANCE_DOC} is in the store but has no section for {missing}. "
-            "Triage routes on these sections; building an agent without them "
-            "reintroduces the over-escalation they exist to prevent."
+            "Triage and the verifier judge escalation against these sections; "
+            "building an agent without them reintroduces the over-escalation they "
+            "exist to prevent."
         )
 
-    sections = [f"### {h}\n\n" + "\n\n".join(by_heading[h]) for h in TRIAGE_MATRIX_SECTIONS]
-    return "\n\n## Escalation and routing matrix\n\n" + "\n\n".join(sections) + "\n"
+    rendered = [f"### {h}\n\n" + "\n\n".join(by_heading[h]) for h in sections]
+    return "\n\n## Escalation and routing matrix\n\n" + "\n\n".join(rendered) + "\n"
 
 
 class KestrelAgent:
@@ -168,10 +181,11 @@ class KestrelAgent:
         self.llm = llm or get_llm()
         self.k = k
         self.require_approval = require_approval
+        records = retriever.all_records
         self.prompts = {
-            "triage": _read("triage.md") + _triage_matrix(retriever.all_records),
+            "triage": _read("triage.md") + _matrix_prompt(records, TRIAGE_MATRIX_SECTIONS),
             "answer": _read("answer.md"),
-            "verify": _read("verifier.md"),
+            "verify": _read("verifier.md") + _matrix_prompt(records, VERIFIER_MATRIX_SECTIONS),
         }
         self.graph = self._build()
 

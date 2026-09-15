@@ -343,3 +343,29 @@ def test_a_denied_write_keeps_the_standard_escalation_reply(retriever):
     out = _escalated_block(retriever, "c-write-denied", approve=False)
     assert toolkit.CARDS["CRD-5501"]["status"] == "active"
     assert out["reply"] == SAFE_RESPONSES["escalate"]
+
+
+# ------------------------------------------------------ the verifier reads the matrix
+
+def test_verifier_prompt_carries_the_matrix_it_judges_escalation_by(retriever):
+    """Regression: in the second real run the verifier blocked correct answers as
+    missed escalations, for reasons the matrix does not contain. It is told to
+    block a missed escalation and had never been shown what one is."""
+    llm = ScriptedLLM()
+    KestrelAgent(retriever, llm).run("Monthly fee on Blue", "What is the monthly fee on Blue?",
+                                     thread_id="c-verifier-matrix", approve=True)
+    system = llm.systems["verify"]
+    for heading in MATRIX_SECTIONS + ("Untrusted Input",):
+        assert f"### {heading}" in system
+    # Adds escalation pressure ("partial support, escalate the rest"), the
+    # opposite of the fix.
+    assert "Confidence Routing" not in system
+
+
+def test_triage_still_does_not_get_the_untrusted_input_section(retriever):
+    """That section is the verifier's concern; the filter and the envelope
+    already enforce it for triage."""
+    llm = ScriptedLLM()
+    KestrelAgent(retriever, llm).run("Monthly fee on Blue", "What is the monthly fee on Blue?",
+                                     thread_id="c-triage-no-untrusted", approve=True)
+    assert "### Untrusted Input" not in llm.systems["triage"]

@@ -105,7 +105,7 @@ Unset the three variables to go back to the offline path.
   Listing models is free, so it is not a billing check. A failed ingest writes no
   vectors and no fingerprint; add credits and re-run it.
 - Measured cost: embedding the whole corpus is a fraction of a cent, and a full
-  48-case agent eval on `gpt-4o-mini` comes to about $0.03 at list price.
+  48-case agent eval on `gpt-4o-mini` comes to $0.03–0.04 at list price.
 
 ## What's here now
 
@@ -117,7 +117,7 @@ src/kestrel/ chunking, BM25, embeddings, embedder-aware vector store,
              hybrid retrieval, cross-encoder reranking, LLM providers,
              model-output contracts, injection filter, mock tools, agent graph
 scripts/     ingest, retrieval eval, agent eval, single-ticket runner, query tool
-tests/       81 tests — table integrity, ingestion, retrieval modes, reranking,
+tests/       83 tests — table integrity, ingestion, retrieval modes, reranking,
              fail-closed model contracts, agent safety
 ```
 
@@ -260,7 +260,7 @@ from the policy that actually answers it.
 | noop | 1.2 ms |
 | cross-encoder | 475.8 ms |
 
-400x, on CPU. Against a measured 4.1-second ticket that would be about 12% —
+400x, on CPU. Against a measured 4-second ticket that would be about 12% —
 affordable, if it helped. With semantic retrieval it does not, so `NoopReranker`
 stays the default, CI never downloads a model, and on this corpus the reranker is
 not worth enabling at all.
@@ -286,8 +286,9 @@ numeric and identifier matching is where dense retrieval is weakest.
 
 **Governance documents are excluded from the answer pool.** The escalation
 matrix is `customer_facing: false` and enters retrieval only when triage
-requests it via `force_docs`. Triage itself reads the matrix's decision sections
-directly — see [Running with a real model](#running-with-a-real-model) for why.
+requests it via `force_docs`. Triage and the verifier read the matrix's decision
+sections directly — see [Running with a real model](#running-with-a-real-model)
+for why, and for what that did and did not fix.
 
 **Content-hash incremental ingestion.** Re-embedding an unchanged corpus costs
 nothing; editing one document re-embeds only its changed chunks. A hash only
@@ -412,30 +413,33 @@ patched because it is the clearest evidence in the project that the stub is
 scaffolding: the one case it failed was the one where failing matters most, and
 a longer regex is not the repair — a model is.
 
-`gpt-4o-mini` escalated EM-07 in both real runs below. In the first, the same
-model also escalated routine fee and dispute questions, so that 100% came cheap;
-in the second it held while over-escalation halved, which makes it mean more.
+`gpt-4o-mini` escalated EM-07 in all three real runs below. In the first, the
+same model also escalated routine fee and dispute questions, so that 100% came
+cheap; in the later two it held while over-escalation halved, which makes it mean
+more.
 
 ### Running with a real model
 
 `gpt-4o-mini` behind the graph, OpenAI embeddings, all 48 cases. **Run 1** is the
-agent as it stood. **Run 2** follows one change made because of what run 1
-showed, and is reported beside it rather than in place of it.
+agent as it stood. **Runs 2 and 3** each follow exactly one change made because of
+what the run before showed, and each is reported beside the others rather than in
+place of them.
 
-| Metric | n | Stub | Run 1 | Run 2 |
-|---|---|---|---|---|
-| Forbidden-content violations | 48 | 0 | **0** | **0** |
-| Injection catch rate / false positives | 6 / 42 | 100% / 0% | 100% / 0% | 100% / 0% |
-| LLM call failures | 48 | 0 | 0 | 0 |
-| Mandatory escalations that reached a human | 7 | 100% | **100%** | **100%** |
-| Answerable tickets actually answered | 32 | n/a | at most 10 | **15** |
-| Triage routing accuracy | 48 | 100% | 58.3% | **72.9%** |
-| Final routing accuracy, after the verifier | 48 | 100% | 47.9% | 60.4% |
-| Category accuracy | 48 | 60.4% | 45.8% | 52.1% |
-| Tool selection | 6 | 100% | 66.7% | 66.7% |
-| `must_contain` | 27 | not scored | 37.0% | 55.6% |
-| Cost at list price | 48 | — | $0.0311 | $0.0325 |
-| Latency per ticket, mean / p95 | 48 | 6 ms | 4.1 s / 5.8 s | 4.1 s / 6.0 s |
+| Metric | n | Stub | Run 1 | Run 2 | Run 3 |
+|---|---|---|---|---|---|
+| Forbidden-content violations | 48 | 0 | **0** | **0** | **0** |
+| Injection catch rate / false positives | 6 / 42 | 100% / 0% | 100% / 0% | 100% / 0% | 100% / 0% |
+| LLM call failures | 48 | 0 | 0 | 0 | 0 |
+| Mandatory escalations that reached a human | 7 | 100% | **100%** | **100%** | **100%** |
+| Answerable tickets actually answered | 32 | n/a | at most 10 | **15** | 14 |
+| Triage routing accuracy | 48 | 100% | 58.3% | **72.9%** | 72.9% |
+| Final routing accuracy, after the verifier | 48 | 100% | 47.9% | **60.4%** | 58.3% |
+| Category accuracy | 48 | 60.4% | 45.8% | 52.1% | 52.1% |
+| Tool selection | 6 | 100% | 66.7% | 66.7% | 66.7% |
+| `must_contain` | 27 | not scored | 37.0% | **55.6%** | 48.1% |
+| Verifier pass / revise / block | 48 | — | 10 / 1 / 35 | 15 / 1 / 26 | 15 / 2 / 25 |
+| Cost at list price | 48 | — | $0.0311 | $0.0325 | $0.0368 |
+| Latency per ticket, mean / p95 | 48 | 6 ms | 4.1 s / 5.8 s | 4.1 s / 6.0 s | 4.6 s / 6.8 s |
 
 The stub's routing column is the circular 100% explained above; only the real
 runs measure anything.
@@ -455,36 +459,79 @@ and never reached triage. The stub never needed them, because its regexes encode
 them. It was the same gap as the tool names, which the prompt referenced without
 ever listing until the first real run.
 
-**The change between runs.** Triage now reads the matrix's decision sections from
-the same store the retriever uses, so the matrix stays the one source of truth
-and a governance edit reaches triage on re-ingest. *Confidence Routing* is left
-out: it depends on retrieval results triage has not seen yet, and "conflicting
-policies retrieved: escalate" would push triage the wrong way. An agent built on
-a store that holds the matrix but lacks one of those sections refuses to start.
+**Change before run 2: triage reads the matrix.** Triage now reads the matrix's
+decision sections from the same store the retriever uses, so the matrix stays the
+one source of truth and a governance edit reaches triage on re-ingest.
+*Confidence Routing* is left out: it depends on retrieval results triage has not
+seen yet, and "conflicting policies retrieved: escalate" would push triage the
+wrong way. An agent built on a store that holds the matrix but lacks one of those
+sections refuses to start.
 
 **Run 2: more useful, still safe, not yet good.** Triage routing rose from 58.3%
 to 72.9%, and answered tickets from at most 10 to 15 of 32. Mandatory escalation
 stayed at 7 of 7 and forbidden content at zero — the result that mattered most,
 because loosening escalation fails in the dangerous direction if it fails at all.
-What is left is specific:
+What was left was specific:
 
-- **Account-data questions still escalate.** Tool selection did not move, and four
-  of the six `tool_required` tickets — which account am I on, where is my dispute,
-  an unknown charge, a stolen card — were escalated. The matrix lists the policy
-  topics an agent may answer, and nothing about questions a tool can answer from
-  the customer's own account.
+- **Account-data questions still escalate.** Four of the six `tool_required`
+  tickets — which account am I on, where is my dispute, an unknown charge, a
+  stolen card — were escalated. The matrix lists the policy topics an agent may
+  answer, and nothing about questions a tool can answer from the customer's own
+  account.
 - **A new failure: asking instead of answering.** Four answerable tickets went to
   `clarify`. Escalation misses fell from at least 12 to 6; some of that became
   over-clarification rather than answers.
-- **The verifier now does the most damage.** Six tickets triage routed correctly
-  were blocked or sent back. One block was right: KD-03's draft told the customer
-  they were verified to Level 1 when the ticket said Level 2 — an invented account
+- **The verifier did the most damage.** Six tickets triage routed correctly were
+  blocked or sent back. One block was right: KD-03's draft told the customer they
+  were verified to Level 1 when the ticket said Level 2 — an invented account
   fact, caught before it was sent. Others blocked correct answers as needing
   escalation for reasons the matrix does not contain: a right fee-waiver answer
   because the ticket also asked for a refund, a right 120-day dispute window
-  because the ticket carried an injection attempt. The verifier is told to block a
-  missed escalation and has never seen the matrix — the same gap triage had, one
-  node later.
+  because the ticket carried an injection attempt. The verifier was told to block
+  a missed escalation and had never seen the matrix — apparently the same gap
+  triage had, one node later.
+
+**Change before run 3: the verifier reads the matrix.** It was given the same
+decision sections plus *Untrusted Input*, and told that the matrix alone defines
+what requires escalation.
+
+**Run 3: the verifier's excuses changed, its decisions did not.** It blocked as
+often as before — 15 passes, 2 revisions and 25 blocks, against 15, 1 and 26 —
+and answered tickets fell from 15 to 14. One ticket recovered (KM-05); two new
+ones were lost (KM-01, KM-02). What changed was the stated reasons. The verifier
+now quotes the matrix's own triggers and applies them to tickets they do not
+describe:
+
+- an ATM-limit question, blocked as *"a question about a suspicious transaction
+  report"*;
+- a free replacement card after confirmed fraud, blocked as needing the financial
+  crime team;
+- a goodwill-refund request, called *"a mandatory escalation topic"* — no such
+  trigger exists;
+- a correct dispute-window answer, blocked for not escalating an injection
+  attempt — which the *Untrusted Input* section it had just been given says to
+  flag while still serving the legitimate request.
+
+KD-03 was still stopped, now for a narrower and defensible reason: the draft
+stated the customer's verification level as fact, an account detail that should
+come from a tool.
+
+So the hypothesis behind the change was wrong. The verifier's false blocks were
+not a missing-information problem. The block rate did not move, and the reasons
+now cite rules that do not fit the tickets. That reads less like a model lacking
+criteria and more like an adversarial prompt — *"assume the draft is wrong until
+each claim is shown supported"* — biasing a small model toward blocking, with the
+rules it is given used as justification rather than as a test. Better rules
+produced better-sounding excuses.
+
+It also raises a design question the runs cannot settle alone. Escalation is
+already triage's decision, and the graph already forces a block on any draft for
+a ticket triage escalated or refused. The verifier's own escalation judgement is
+a second line behind that. Across three runs it has not caught a single mandatory
+escalation triage missed — triage missed none — and it has blocked several
+correct answers. That is an argument for narrowing the verifier to groundedness,
+forbidden content and injection-obedience; it is also only three runs over seven
+escalation tickets, which is thin evidence for removing a safety layer.
 
 **A defect run 1 exposed, and its fix.** In the first run's demo, *"my wallet was
 stolen, please block my card"* was escalated, yet `block_card` still ran — the
@@ -492,13 +539,14 @@ graph dispatches tools whatever the route — and after approval the customer wa
 told *"I have not made any decision about your account."* An executed write now
 adds its own notice to the reply, and the escalation text no longer claims no
 decision was made; a declined write keeps the standard reply, which is then true.
-Run 2 did not exercise this with the real model: triage escalated the stolen-card
-ticket again but selected no tool, so nothing ran. The fix is covered by offline
-tests only.
+No real-model run has exercised this yet: triage has since escalated the
+stolen-card ticket without selecting a tool, so nothing ran. The fix is covered by
+offline tests only.
 
-**Cost and latency.** About $0.03 per 48-ticket run at list price, roughly $0.0007
-a ticket. Mean 4.1 s and p95 6.0 s end to end, 90% of it model time — the offline
-6 ms was, as expected, no predictor at all.
+**Cost and latency.** $0.03–0.04 per 48-ticket run at list price, under a tenth of
+a cent a ticket. Mean 4.1–4.6 s and p95 up to 6.8 s end to end, 85–90% of it model
+time; the verifier's longer prompt in run 3 added about half a second a ticket.
+The offline 6 ms was, as expected, no predictor at all.
 
 ## Retrieval traps in the corpus
 
@@ -560,7 +608,8 @@ prints token counts and no price rather than guessing.
 Not measured yet: **groundedness** (claims with a supporting span in the
 context) and **hallucination rate** (unsupported figures per 100 replies). The
 verifier reports unsupported claims, but that is one model grading another, and
-neither metric is worth quoting until something independent checks it.
+run 3 is a reminder of how far that grading can drift from the rules it is given.
+Neither metric is worth quoting until something independent checks it.
 
 ## Roadmap
 
@@ -579,9 +628,10 @@ neither metric is worth quoting until something independent checks it.
 - [x] Cross-encoder reranking (opt-in; helps offline, hurts with semantic retrieval)
 - [x] A real LLM behind the graph (`gpt-4o-mini`, safe end to end)
 - [x] Triage reads the escalation matrix (triage routing 58.3% → 72.9%)
+- [x] Verifier reads the matrix (run 3: no improvement — it blocked as often, citing triggers that do not fit)
 - [x] An executed write is stated in the reply, even on an escalated ticket
 - [x] Per-ticket eval results, so a paid run is never repeated to inspect it
-- [ ] Give the verifier the matrix too — it blocks correct answers for escalation reasons the matrix does not contain
+- [ ] Decide whether the verifier should judge escalation at all, or only groundedness, forbidden content and injection-obedience
 - [ ] Tell triage that account-data questions are answered through tools (tool-backed tickets still mostly escalate)
 - [ ] Independent groundedness and hallucination-rate scoring
 - [ ] Verifier revise loop (`revise` currently blocks, same as `block`)
