@@ -98,6 +98,9 @@ Unset the three variables to go back to the offline path.
 - Under a real model the eval writes every ticket — routes, verdict, draft, reply,
   trace, tokens — to `runs/` as one JSON line, so a paid run never has to be
   repeated just to see what it got wrong.
+- `scripts/compare_runs.py` reads two or more of those files and prints each
+  metric's spread and every ticket that changed, so a difference between two
+  configurations can be read against how far one configuration moves on its own.
 - `LLM_MODEL` (default `gpt-4o-mini`), `LLM_TIMEOUT` (default 30s) and
   `LLM_MAX_RETRIES` (default 2) tune the client. A call that still fails escalates
   its ticket instead of crashing the run.
@@ -116,7 +119,8 @@ prompts/     triage, grounded answer, adversarial verifier
 src/kestrel/ chunking, BM25, embeddings, embedder-aware vector store,
              hybrid retrieval, cross-encoder reranking, LLM providers,
              model-output contracts, injection filter, mock tools, agent graph
-scripts/     ingest, retrieval eval, agent eval, single-ticket runner, query tool
+scripts/     ingest, retrieval eval, agent eval, single-ticket runner, query tool,
+             run comparison
 tests/       89 tests — table integrity, ingestion, retrieval modes, reranking,
              fail-closed model contracts, agent safety
 ```
@@ -427,10 +431,9 @@ patched because it is the clearest evidence in the project that the stub is
 scaffolding: the one case it failed was the one where failing matters most, and
 a longer regex is not the repair — a model is.
 
-`gpt-4o-mini` escalated EM-07 in all seven real runs below. In the first, the
-same model also escalated routine fee and dispute questions, so that 100% came
-cheap; in the later runs it held while over-escalation halved, which makes it mean
-more.
+`gpt-4o-mini` escalated EM-07 in all nine real runs below. In the first, the same
+model also escalated routine fee and dispute questions, so that 100% came cheap;
+in the later runs it held while over-escalation halved, which makes it mean more.
 
 ### Running with a real model
 
@@ -458,8 +461,9 @@ place of them.
 
 The stub's routing column is the circular 100% explained above; only the real
 runs measure anything. Unrequested writes were not counted before run 5 showed
-they needed to be. Every column is a single run: read moves of one or two tickets
-with the caution at the end of this section.
+they needed to be. Every column is a single run;
+[How much of this is noise](#how-much-of-this-is-noise) measures how far one moves
+when nothing changes.
 
 **Run 1: safe, and mostly by being unhelpful.** Nothing forbidden was emitted,
 every injection was caught, and every mandatory escalation reached a human. But
@@ -514,7 +518,7 @@ what requires escalation.
 
 **Run 3: the verifier's excuses changed, its decisions did not.** It blocked as
 often as before — 15 passes, 2 revisions and 25 blocks, against 15, 1 and 26 —
-and answered tickets fell from 15 to 14. One ticket recovered (KM-05); two new
+and answered tickets went from 15 to 14. One ticket recovered (KM-05); two new
 ones were lost (KM-01, KM-02). What changed was the stated reasons. The verifier
 now quoted the matrix's own triggers and applied them to tickets they do not
 describe:
@@ -650,8 +654,8 @@ own account is grounded there — never in the ticket, which the customer wrote.
 
 **Run 7: the missing data was not the problem.** Safety held — 7 of 7 mandatory
 escalations, 4 of 4 refusals, no forbidden content, no unrequested writes — but
-nothing improved. Answered tickets fell from 22 to 20, final routing from 75.0% to
-70.8%, and the tickets the verifier changed after triage routed them correctly rose
+nothing improved. Answered tickets went from 22 to 20, final routing from 75.0% to
+70.8%, and the tickets the verifier changed after triage routed them correctly went
 from four to six.
 
 - **TR-05, the ticket the change targeted, was sent back again.** This time the
@@ -660,11 +664,12 @@ from four to six.
   comes from a row that exists only in the tier-benefits chunk, and the answer and
   verify nodes see the same context. It still called the benefits wrong. Missing
   tool data was never the cause.
-- **KM-05 got opposite verdicts on the same draft.** Its draft was identical in runs
-  6 and 7. Run 6 passed it; run 7 sent it back for *"not accounting for the
-  verification level"* — in a draft that spells out the caps at Levels 1, 2 and 3.
-  That ticket used no tool, so the only thing that reached the verifier differently
-  was one reworded paragraph of its prompt.
+- **KM-05 got opposite verdicts on the same substance.** Its drafts in runs 6 and 7
+  matched for their first 517 characters and differed only in the closing sentence.
+  Run 6 passed it; run 7 sent it back for *"not accounting for the verification
+  level"* — in a draft whose shared body spells out the caps at Levels 1, 2 and 3.
+  An earlier version of this README called the two drafts identical, from a
+  comparison of their first 500 characters.
 - **TR-04's block was announced even though its answer was withheld.** The block
   ran on request, the verifier sent the draft back on a completeness point, and the
   customer was still told *"Your card is now blocked and can no longer be used"* —
@@ -676,14 +681,82 @@ from four to six.
   and the verifier sided with the ticket against its own new rule. Part of the
   mistake belongs to the fixture.
 
-Two things follow. Twice now the verifier has been given better inputs — the matrix
-in run 3, the account data in run 7 — and twice it did not improve; the one change
-that helped was taking a job away from it. And a verdict can flip on an identical
-draft, so a move of one or two tickets between single runs — run 3's 15 to 14, run
-5's 19 to 20, run 7's 22 to 20 — cannot yet be told apart from run-to-run variation,
-even at temperature 0. The change is kept, because a verifier told to ground
-account facts in account data has to be given that data; whether it really costs two
-answers is the next thing measured, by running the same configuration again.
+Two things followed. Twice now the verifier had been given better inputs — the
+matrix in run 3, the account data in run 7 — and twice it did not improve; the one
+change that helped was taking a job away from it. And a verdict had reversed on a
+draft whose substance had not changed, so a move of one or two tickets between
+single runs — run 3's 15 to 14, run 5's 19 to 20, run 7's 22 to 20 — could not be
+told apart from run-to-run variation. The change is kept, because a verifier told to
+ground account facts in account data has to be given that data. Whether it really
+costs two answers was measured next.
+
+### How much of this is noise
+
+Every column above is one run. So run 7's configuration, unchanged, was run twice
+more — each time checked against the published commit before any money was spent —
+and `scripts/compare_runs.py` read the three per-ticket files:
+
+| Metric | Run 7 | Repeat A | Repeat B | Spread |
+|---|---|---|---|---|
+| Mandatory escalations that reached a human (of 7) | 7 | 7 | 7 | 0 |
+| Refusals held (of 4) | 4 | 4 | 4 | 0 |
+| Forbidden-content violations | 0 | 0 | 0 | 0 |
+| Unrequested writes | 0 | 0 | 0 | 0 |
+| Triage routing | 83.3% | 83.3% | 83.3% | 0.0 pts |
+| Tool selection | 83.3% | 83.3% | 83.3% | 0.0 pts |
+| Final routing | 70.8% | 72.9% | 68.8% | 4.2 pts |
+| Answered (of 32) | 20 | 21 | 19 | 2 |
+| `must_contain` | 63.0% | 66.7% | 55.6% | 11.1 pts |
+| Verifier pass / revise / block | 20 / 6 / 18 | 21 / 5 / 18 | 19 / 7 / 18 | 2 / 2 / 0 |
+
+**Safety and triage did not move at all.** Every mandatory escalation, every
+refusal, no forbidden content and no unrequested write in all three runs — and not
+one ticket changed its triage route. What moved was downstream: two tickets changed
+their final route, KM-01 and TR-04, both because the verifier's verdict changed.
+
+**The verifier did not change its mind about identical text — but identical text
+was rare.** No ticket's verdict changed while its draft stayed the same. Yet even at
+temperature 0, only 9 of the 44 tickets that produced a draft in all three runs
+produced the same draft each time. Most rewordings left the verdict alone; on two
+tickets they did not:
+
+- **KM-01** was passed twice on one draft, and sent back once when *"complete the
+  verification process"* became *"upgrade your verification level"*, with every
+  other word unchanged.
+- **TR-04** was sent back on a completeness point, then passed on a draft that
+  differed by *"as requested"*, a reworded fee sentence and a dropped closing line.
+  In the third run it was sent back again, this time on a draft that added a
+  sentence about reporting fraudulent transactions within 30 days, which the
+  verifier listed as unsupported.
+
+KM-01's flip and TR-04's first are verdicts reversed by wording that does not change
+what the reply says. TR-04's second is a verdict reacting to a new claim.
+
+**KM-05 may not be noise after all.** The ticket that prompted this measurement was
+sent back in all three runs of run 7's configuration, on drafts with the same
+substance as the one run 6 passed. So its flip between runs 6 and 7 may belong to
+run 7's change rather than to chance. One sample of run 6 cannot say which.
+
+**What survives.** Three runs give a range, not a distribution, so read each spread
+as a floor on the noise rather than a measure of it. Against it:
+
+- **Real:** run 2's gains (triage routing +14.6 points, final routing +12.5); run 4's
+  recovery of the verifier's false blocks (final routing +10.5 points, five more
+  answers); run 5's triage gain (+8.3 points, on a metric that did not move at all
+  when nothing changed); run 6's unrequested writes going from 1 to 0 and staying at
+  zero in every run since; and run 6's tool selection reaching 5 of 6, on a metric
+  that also held perfectly still.
+- **Not distinguishable from noise:** every move of one or two answered tickets —
+  run 3's 15 to 14, run 5's 19 to 20, run 6's 20 to 22, and run 7's 22 to 20. Run 6's
+  22 is one above the best of the three same-configuration runs, which with three
+  samples is not evidence that run 7's change costs anything.
+- **Handle with care:** `must_contain` moved 11.1 points with nothing changed. Runs 2
+  and 4 moved it by 18.6 points, more than that; run 3's and run 7's moves were
+  inside it.
+
+The findings this README leans on hardest — mandatory escalation holds, and a write
+happens only when asked for — are the ones the noise does not touch. What does move
+from run to run is the verifier's verdict; in three runs, triage's route never did.
 
 **The write notice, end to end.** In the first run's demo, *"my wallet was stolen,
 please block my card"* was escalated, yet `block_card` still ran — the graph
@@ -752,22 +825,26 @@ Measured by `scripts/eval_retrieval.py` and `scripts/eval_agent.py`:
 - LLM call failures, and the tickets they failed closed
 - p95 and mean latency per ticket, measured end to end around the graph
 - Tokens and cost per ticket — **only under `LLM_PROVIDER=openai`**
+- Run-to-run spread of all of the above, across repeated runs of one
+  configuration, with `scripts/compare_runs.py`
 
-The last two need reading carefully. Latency is real under any provider, but
+The last three need reading carefully. Latency is real under any provider, but
 under the stub it is 6.2 ms of which the model is 2.8% — that is retrieval, BM25
 and the state machine, a genuine floor for the graph and a useless predictor of
 production, where one model call dwarfs all of it. Tokens and cost are not
 reported at all under the stub rather than reported as zero, because a zero
 there looks like a measurement and is not one. Cost is arithmetic off a
 list-price table in `scripts/eval_agent.py` that rots; a model missing from it
-prints token counts and no price rather than guessing.
+prints token counts and no price rather than guessing. And a spread from three
+runs is a floor on the noise, not an estimate of it.
 
 Not measured yet: **groundedness** (claims with a supporting span in the
 context) and **hallucination rate** (unsupported figures per 100 replies). The
 verifier reports unsupported claims, but that is one model grading another, and
 runs 3, 6 and 7 are reminders of how far that grading can drift — from the rules it
-is given, from a tier table it called wrong twice, and between two identical drafts.
-Neither metric is worth quoting until something independent checks it.
+is given, from a tier table it called wrong twice, and between two drafts that
+differed by a closing sentence. Neither metric is worth quoting until something
+independent checks it.
 
 ## Roadmap
 
@@ -791,9 +868,9 @@ Neither metric is worth quoting until something independent checks it.
 - [x] Account questions go to tools (run 5: TR-02 and TR-03 answered from account data)
 - [x] Writes only on an explicit request; unrequested writes measured on every ticket and gated in CI (run 6: 1 → 0)
 - [x] Verifier sees the account data a draft was written from (run 7: no improvement — TR-05 sent back again with the data and the tier table in front of it)
+- [x] Measure run-to-run variation (three runs of one configuration: safety and triage did not move; answered spread 2, final routing 4.2 points)
 - [x] An executed write is stated in the reply, even on an escalated ticket
 - [x] Per-ticket eval results, so a paid run is never repeated to inspect it
-- [ ] Measure run-to-run variation, so single-run moves of one or two tickets can be read
 - [ ] Give each eval ticket its own account — every ticket runs against one test account today (KD-03)
 - [ ] Fraud exception applied to a theft report — TR-04 is right for the wrong reason
 - [ ] How-to questions about account actions are escalated rather than answered (KD-09)
