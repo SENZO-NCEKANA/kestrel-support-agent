@@ -41,7 +41,7 @@ PROMPTS = Path(__file__).resolve().parents[2] / "prompts"
 TERMINAL_ROUTES = {"escalate", "refuse", "clarify"}
 
 # The internal escalation and routing matrix. It reaches the answer layer through
-# force_docs, and triage and the verifier read its decision sections directly.
+# force_docs, and triage and the verifier read sections of it directly.
 GOVERNANCE_DOC = "KB-ESC-009"
 
 # The matrix sections triage routes on. Two are left out on purpose: Confidence
@@ -56,14 +56,14 @@ TRIAGE_MATRIX_SECTIONS = (
     "Topics an Agent May Answer Fully",
 )
 
-# The verifier blocks a "missed escalation", and in the second real run it blocked
-# correct answers for escalation reasons the matrix does not contain — it had
-# never been shown the matrix. It gets the same sections plus Untrusted Input,
-# because judging whether a draft obeyed an injection is its job, and that
-# section says an injection is flagged while the real request is still served.
-# Confidence Routing stays out here too: "partial support, escalate the rest"
-# adds escalation pressure, the opposite of this fix.
-VERIFIER_MATRIX_SECTIONS = TRIAGE_MATRIX_SECTIONS + ("Untrusted Input",)
+# The verifier no longer judges escalation. In the second real run it blocked
+# correct answers as missed escalations; given the matrix in the third, it
+# blocked just as often, citing triggers that did not fit the tickets. Escalation
+# is triage's decision, and the graph already forces a block on any draft for a
+# ticket triage escalated or refused (see n_verify). The verifier is left with
+# what only it can judge — groundedness, forbidden content, and whether a draft
+# obeyed an injected instruction — and keeps the one section that bears on that.
+VERIFIER_MATRIX_SECTIONS = ("Untrusted Input",)
 
 SAFE_RESPONSES = {
     "escalate": (
@@ -146,11 +146,10 @@ def _matrix_prompt(records, sections: tuple[str, ...]) -> str:
 
     The first real-model run escalated fee, dispute and account-data questions
     because triage was told to escalate what "must not be answered" and never
-    shown what that meant; the second showed the verifier making the same mistake
-    one node later. So a store that has the matrix but lacks a required section
-    refuses to build an agent: judging escalation without the criteria is the
-    failure, and it is quieter than an error. A store with no matrix at all builds
-    normally.
+    shown what that meant. So a store that has the matrix but lacks a required
+    section refuses to build an agent: running without the rules a node was
+    written against is the failure, and it is quieter than an error. A store with
+    no matrix at all builds normally.
     """
     chunks = sorted((r for r in records if r.doc_id == GOVERNANCE_DOC),
                     key=lambda r: _chunk_index(r.chunk_id))
@@ -165,9 +164,8 @@ def _matrix_prompt(records, sections: tuple[str, ...]) -> str:
     if missing:
         raise ValueError(
             f"{GOVERNANCE_DOC} is in the store but has no section for {missing}. "
-            "Triage and the verifier judge escalation against these sections; "
-            "building an agent without them reintroduces the over-escalation they "
-            "exist to prevent."
+            "Triage and the verifier are written against these sections; building "
+            "an agent without them reintroduces the failures they exist to prevent."
         )
 
     rendered = [f"### {h}\n\n" + "\n\n".join(by_heading[h]) for h in sections]
@@ -293,10 +291,12 @@ class KestrelAgent:
                 "trace": [f"answer: drafted {len(resp.text)} chars"]}
 
     def n_verify(self, state: TicketState) -> dict:
-        # The verifier is asked to block a draft that obeys an instruction in the
-        # ticket, or answers a ticket that needed escalating. It can only judge
-        # that against the ticket itself — sent in the same untrusted envelope the
-        # other nodes use, so it arrives as data rather than instruction.
+        # The verifier judges the draft's content: whether its claims are grounded,
+        # whether it says something forbidden, and whether it obeyed an instruction
+        # in the ticket — which it can only judge against the ticket itself, sent
+        # in the same untrusted envelope the other nodes use. Whether the ticket
+        # should have been escalated is not its call; the override below enforces
+        # that structurally.
         ticket = injection.wrap_untrusted(state.get("subject", ""), state.get("body", ""))
         payload = (f"--- context ---\n{state.get('context','')}\n\n"
                    f"--- draft ---\n{state.get('draft','')}\n\n"

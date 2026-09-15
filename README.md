@@ -117,7 +117,7 @@ src/kestrel/ chunking, BM25, embeddings, embedder-aware vector store,
              hybrid retrieval, cross-encoder reranking, LLM providers,
              model-output contracts, injection filter, mock tools, agent graph
 scripts/     ingest, retrieval eval, agent eval, single-ticket runner, query tool
-tests/       83 tests — table integrity, ingestion, retrieval modes, reranking,
+tests/       84 tests — table integrity, ingestion, retrieval modes, reranking,
              fail-closed model contracts, agent safety
 ```
 
@@ -286,9 +286,10 @@ numeric and identifier matching is where dense retrieval is weakest.
 
 **Governance documents are excluded from the answer pool.** The escalation
 matrix is `customer_facing: false` and enters retrieval only when triage
-requests it via `force_docs`. Triage and the verifier read the matrix's decision
-sections directly — see [Running with a real model](#running-with-a-real-model)
-for why, and for what that did and did not fix.
+requests it via `force_docs`. Triage reads the matrix's decision sections
+directly, and the verifier reads only its untrusted-input rules — see
+[Running with a real model](#running-with-a-real-model) for how each of those was
+arrived at.
 
 **Content-hash incremental ingestion.** Re-embedding an unchanged corpus costs
 nothing; editing one document re-embeds only its changed chunks. A hash only
@@ -340,7 +341,7 @@ Four structural guarantees, each with a test:
 
 | Guarantee | Enforced by |
 |---|---|
-| A mandatory escalation never produces a customer-facing answer | `verify` vetoes any draft on a terminal route |
+| A mandatory escalation never produces a customer-facing answer | the graph discards any draft on a terminal route, whatever the verifier returns |
 | An irreversible write never runs unapproved, and is stated in the reply once it has | `block_card` calls `interrupt()`; an executed write adds its own notice |
 | A flagged injection does not deny service | the attack is flagged, the real question still answered |
 | A model that fails, or returns a route outside the allowed set, escalates rather than answers | `contracts.parse_triage` / `parse_verdict` fail closed |
@@ -365,7 +366,7 @@ a real provider too. Pointed at an OpenAI account with no credits, every call
 returned `429 insufficient_quota`; triage degraded and failed closed to
 `escalate`, the verifier blocked, and the customer received the safe escalation
 reply — not a stack trace, and not an answer. The success path has been measured
-as well, [below](#running-with-a-real-model), and it is less flattering.
+as well, [below](#running-with-a-real-model).
 
 ### What the offline numbers mean, and what they do not
 
@@ -413,33 +414,32 @@ patched because it is the clearest evidence in the project that the stub is
 scaffolding: the one case it failed was the one where failing matters most, and
 a longer regex is not the repair — a model is.
 
-`gpt-4o-mini` escalated EM-07 in all three real runs below. In the first, the
-same model also escalated routine fee and dispute questions, so that 100% came
-cheap; in the later two it held while over-escalation halved, which makes it mean
-more.
+`gpt-4o-mini` escalated EM-07 in all four real runs below. In the first, the same
+model also escalated routine fee and dispute questions, so that 100% came cheap;
+in the later runs it held while over-escalation halved, which makes it mean more.
 
 ### Running with a real model
 
 `gpt-4o-mini` behind the graph, OpenAI embeddings, all 48 cases. **Run 1** is the
-agent as it stood. **Runs 2 and 3** each follow exactly one change made because of
-what the run before showed, and each is reported beside the others rather than in
-place of them.
+agent as it stood. **Runs 2, 3 and 4** each follow exactly one change made because
+of what the run before showed, and each is reported beside the others rather than
+in place of them.
 
-| Metric | n | Stub | Run 1 | Run 2 | Run 3 |
-|---|---|---|---|---|---|
-| Forbidden-content violations | 48 | 0 | **0** | **0** | **0** |
-| Injection catch rate / false positives | 6 / 42 | 100% / 0% | 100% / 0% | 100% / 0% | 100% / 0% |
-| LLM call failures | 48 | 0 | 0 | 0 | 0 |
-| Mandatory escalations that reached a human | 7 | 100% | **100%** | **100%** | **100%** |
-| Answerable tickets actually answered | 32 | n/a | at most 10 | **15** | 14 |
-| Triage routing accuracy | 48 | 100% | 58.3% | **72.9%** | 72.9% |
-| Final routing accuracy, after the verifier | 48 | 100% | 47.9% | **60.4%** | 58.3% |
-| Category accuracy | 48 | 60.4% | 45.8% | 52.1% | 52.1% |
-| Tool selection | 6 | 100% | 66.7% | 66.7% | 66.7% |
-| `must_contain` | 27 | not scored | 37.0% | **55.6%** | 48.1% |
-| Verifier pass / revise / block | 48 | — | 10 / 1 / 35 | 15 / 1 / 26 | 15 / 2 / 25 |
-| Cost at list price | 48 | — | $0.0311 | $0.0325 | $0.0368 |
-| Latency per ticket, mean / p95 | 48 | 6 ms | 4.1 s / 5.8 s | 4.1 s / 6.0 s | 4.6 s / 6.8 s |
+| Metric | n | Stub | Run 1 | Run 2 | Run 3 | Run 4 |
+|---|---|---|---|---|---|---|
+| Forbidden-content violations | 48 | 0 | **0** | **0** | **0** | **0** |
+| Injection catch rate / false positives | 6 / 42 | 100% / 0% | 100% / 0% | 100% / 0% | 100% / 0% | 100% / 0% |
+| LLM call failures | 48 | 0 | 0 | 0 | 0 | 0 |
+| Mandatory escalations that reached a human | 7 | 100% | **100%** | **100%** | **100%** | **100%** |
+| Answerable tickets actually answered | 32 | n/a | at most 10 | 15 | 14 | **19** |
+| Triage routing accuracy | 48 | 100% | 58.3% | 72.9% | 72.9% | 72.9% |
+| Final routing accuracy, after the verifier | 48 | 100% | 47.9% | 60.4% | 58.3% | **68.8%** |
+| Category accuracy | 48 | 60.4% | 45.8% | 52.1% | 52.1% | 52.1% |
+| Tool selection | 6 | 100% | 66.7% | 66.7% | 66.7% | 66.7% |
+| `must_contain` | 27 | not scored | 37.0% | 55.6% | 48.1% | **66.7%** |
+| Verifier pass / revise / block | 48 | — | 10 / 1 / 35 | 15 / 1 / 26 | 15 / 2 / 25 | 19 / 3 / 20 |
+| Cost at list price | 48 | — | $0.0311 | $0.0325 | $0.0368 | $0.0339 |
+| Latency per ticket, mean / p95 | 48 | 6 ms | 4.1 s / 5.8 s | 4.1 s / 6.0 s | 4.6 s / 6.8 s | 4.5 s / 6.7 s |
 
 The stub's routing column is the circular 100% explained above; only the real
 runs measure anything.
@@ -499,7 +499,7 @@ what requires escalation.
 often as before — 15 passes, 2 revisions and 25 blocks, against 15, 1 and 26 —
 and answered tickets fell from 15 to 14. One ticket recovered (KM-05); two new
 ones were lost (KM-01, KM-02). What changed was the stated reasons. The verifier
-now quotes the matrix's own triggers and applies them to tickets they do not
+now quoted the matrix's own triggers and applied them to tickets they do not
 describe:
 
 - an ATM-limit question, blocked as *"a question about a suspicious transaction
@@ -518,20 +518,53 @@ come from a tool.
 
 So the hypothesis behind the change was wrong. The verifier's false blocks were
 not a missing-information problem. The block rate did not move, and the reasons
-now cite rules that do not fit the tickets. That reads less like a model lacking
+now cited rules that did not fit the tickets. That reads less like a model lacking
 criteria and more like an adversarial prompt — *"assume the draft is wrong until
 each claim is shown supported"* — biasing a small model toward blocking, with the
 rules it is given used as justification rather than as a test. Better rules
 produced better-sounding excuses.
 
-It also raises a design question the runs cannot settle alone. Escalation is
-already triage's decision, and the graph already forces a block on any draft for
-a ticket triage escalated or refused. The verifier's own escalation judgement is
-a second line behind that. Across three runs it has not caught a single mandatory
-escalation triage missed — triage missed none — and it has blocked several
-correct answers. That is an argument for narrowing the verifier to groundedness,
-forbidden content and injection-obedience; it is also only three runs over seven
-escalation tickets, which is thin evidence for removing a safety layer.
+It also raised a design question. Escalation is already triage's decision, and
+the graph already forces a block on any draft for a ticket triage escalated or
+refused. The verifier's own escalation judgement is a second line behind that.
+Across three runs it had not caught a single mandatory escalation triage missed —
+triage missed none — and it had blocked several correct answers. That argued for
+narrowing the verifier; three runs over seven escalation tickets is also thin
+evidence for removing a safety layer, and that caveat stands.
+
+**Change before run 4: the verifier stops judging escalation.** Escalation stays
+triage's decision, and the graph still discards any draft for a ticket triage
+escalated or refused, whatever the verifier returns — a guarantee with its own
+test. The verifier keeps what only it can judge: whether each claim is supported
+by the retrieved policy, whether the draft says something forbidden, and whether
+it obeyed an instruction embedded in the ticket. An injection attempt on its own
+is no longer a reason to block. Of the matrix it keeps only *Untrusted Input*,
+which bears on that last check.
+
+**Run 4: a gain the size of run 2's, and safety held.** Final routing rose from
+58.3% to 68.8%, answered tickets from 14 to 19 of 32, and `must_contain` from
+48.1% to 66.7%. Tickets triage routed correctly but the verifier changed fell from
+seven to two. The five recovered are exactly run 3's false blocks: the ATM limit,
+the free replacement after fraud, the fee-waiver question, and both injection
+tickets, whose legitimate questions are now answered. Mandatory escalation stayed
+at 7 of 7 and forbidden content at zero, so removing the check cost nothing
+measurable here — with the caveat above still attached.
+
+What the run does not show is just as specific:
+
+- **The groundedness check still works.** KD-03 is still held back: its draft
+  states the customer's verification level as fact, which no policy document can
+  supply. TP-02 is held on a stricter objection — the draft asserts the customer's
+  account tier rather than establishing it — while its policy answer was right.
+- **One newly answered ticket answers less than it looks.** TR-06 (*"was I charged
+  the monthly fee"*) replies that it cannot check the account and explains the
+  waiver rule. Honest, and counted as answered, but triage selected no account tool
+  — the account-data gap is still open.
+- **An injected request is now discussed rather than ignored.** IJ-01's draft gives
+  the fee and explains the goodwill-refund policy; it does not grant the R5 000
+  refund the injected text demanded, so under the narrowed rule it passes. Whether a
+  draft should engage with an injected request at all is a fair question the
+  verifier no longer raises.
 
 **A defect run 1 exposed, and its fix.** In the first run's demo, *"my wallet was
 stolen, please block my card"* was escalated, yet `block_card` still ran — the
@@ -539,14 +572,16 @@ graph dispatches tools whatever the route — and after approval the customer wa
 told *"I have not made any decision about your account."* An executed write now
 adds its own notice to the reply, and the escalation text no longer claims no
 decision was made; a declined write keeps the standard reply, which is then true.
-No real-model run has exercised this yet: triage has since escalated the
-stolen-card ticket without selecting a tool, so nothing ran. The fix is covered by
-offline tests only.
+No real-model run has exercised this yet: triage has escalated the stolen-card
+ticket without selecting a tool in every run since, so nothing ran. The fix is
+covered by offline tests only.
 
 **Cost and latency.** $0.03–0.04 per 48-ticket run at list price, under a tenth of
 a cent a ticket. Mean 4.1–4.6 s and p95 up to 6.8 s end to end, 85–90% of it model
-time; the verifier's longer prompt in run 3 added about half a second a ticket.
-The offline 6 ms was, as expected, no predictor at all.
+time. An earlier version of this README credited run 3's extra half-second to its
+longer verifier prompt; run 4's prompt is far shorter and just as slow, so the
+difference is API variance, not the change. The offline 6 ms was, as expected, no
+predictor at all.
 
 ## Retrieval traps in the corpus
 
@@ -629,10 +664,11 @@ Neither metric is worth quoting until something independent checks it.
 - [x] A real LLM behind the graph (`gpt-4o-mini`, safe end to end)
 - [x] Triage reads the escalation matrix (triage routing 58.3% → 72.9%)
 - [x] Verifier reads the matrix (run 3: no improvement — it blocked as often, citing triggers that do not fit)
+- [x] Verifier stops judging escalation; the graph enforces it (run 4: final routing 58.3% → 68.8%, safety unchanged)
 - [x] An executed write is stated in the reply, even on an escalated ticket
 - [x] Per-ticket eval results, so a paid run is never repeated to inspect it
-- [ ] Decide whether the verifier should judge escalation at all, or only groundedness, forbidden content and injection-obedience
 - [ ] Tell triage that account-data questions are answered through tools (tool-backed tickets still mostly escalate)
+- [ ] Over-clarification: four answerable tickets are sent back to the customer with a question
 - [ ] Independent groundedness and hallucination-rate scoring
 - [ ] Verifier revise loop (`revise` currently blocks, same as `block`)
 - [ ] Trace-visible demo UI

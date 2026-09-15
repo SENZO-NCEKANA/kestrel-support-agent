@@ -345,21 +345,33 @@ def test_a_denied_write_keeps_the_standard_escalation_reply(retriever):
     assert out["reply"] == SAFE_RESPONSES["escalate"]
 
 
-# ------------------------------------------------------ the verifier reads the matrix
+# ------------------------------------------------ the verifier does not judge escalation
 
-def test_verifier_prompt_carries_the_matrix_it_judges_escalation_by(retriever):
-    """Regression: in the second real run the verifier blocked correct answers as
-    missed escalations, for reasons the matrix does not contain. It is told to
-    block a missed escalation and had never been shown what one is."""
+def test_verifier_no_longer_judges_escalation(retriever):
+    """Run 3: given the matrix, the verifier blocked as often as before, citing
+    escalation triggers that did not fit the tickets. Escalation is triage's
+    decision and the graph enforces it; the verifier keeps only the matrix
+    section that bears on injection-obedience."""
     llm = ScriptedLLM()
     KestrelAgent(retriever, llm).run("Monthly fee on Blue", "What is the monthly fee on Blue?",
-                                     thread_id="c-verifier-matrix", approve=True)
+                                     thread_id="c-verifier-narrowed", approve=True)
     system = llm.systems["verify"]
-    for heading in MATRIX_SECTIONS + ("Untrusted Input",):
-        assert f"### {heading}" in system
-    # Adds escalation pressure ("partial support, escalate the rest"), the
-    # opposite of the fix.
-    assert "Confidence Routing" not in system
+    assert "### Untrusted Input" in system
+    for heading in MATRIX_SECTIONS + ("Confidence Routing",):
+        assert f"### {heading}" not in system
+    assert "Missing escalation" not in system
+
+
+def test_escalation_is_still_enforced_when_the_verifier_passes(retriever):
+    """Narrowing the verifier removes a judgement, not the guarantee: a draft for
+    a ticket triage escalated is discarded even when the verifier says pass."""
+    escalated = dict(VALID_TRIAGE, category="escalate_mandatory", route="escalate",
+                     force_docs=["KB-ESC-009"])
+    out = run_with(retriever, "c-escalation-structural",
+                   triage=LLMResponse(text="{}", data=escalated))
+    assert out["route"] == "escalate"
+    assert out["verdict"]["missing_escalation"] is True
+    assert DRAFT not in out["reply"]
 
 
 def test_triage_still_does_not_get_the_untrusted_input_section(retriever):
