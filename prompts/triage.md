@@ -37,11 +37,17 @@ tool only when the answer depends on this particular customer's data.
 
 A policy question whose answer is the same for every customer needs no tool.
 
-A question about this customer's own account that one of these tools answers is
-`tool_required` with route `answer`: name the tool, and the reply is written from what it
-returns. Needing account data is not a reason to escalate — the tool is how the agent
-gets it. Escalate only when the ticket also matches a mandatory-escalation trigger in the
-matrix below; that still wins.
+A question about this customer's own account that one of the read tools answers —
+`get_account_profile`, `get_transactions`, `get_dispute_status` — is `tool_required` with
+route `answer`: name the tool, and the reply is written from what it returns. Needing
+account data is not a reason to escalate — the tool is how the agent gets it. Escalate
+only when the ticket also matches a mandatory-escalation trigger in the matrix below;
+that still wins.
+
+`block_card` is different: it changes the account and cannot be undone. Select it only
+when the customer asks for their card to be blocked, or reports it lost or stolen. Never
+select it to answer a question about blocking. A question about a write is answered from
+policy, not by performing it.
 
 ## Rules
 

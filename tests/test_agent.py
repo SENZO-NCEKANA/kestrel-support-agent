@@ -145,6 +145,17 @@ def test_block_card_declined_leaves_card_active(agent):
     assert any("DENIED" in t for t in out["trace"])
 
 
+def test_a_question_about_blocking_does_not_block_the_card(agent):
+    """Regression: the stub's rule matched "block my card" anywhere, so a how-to
+    question about blocking selected block_card, and the eval — which approves
+    every write — ran it on every CI build. A correct route hid it."""
+    toolkit.reset_fixtures()
+    out = agent.run("Blocking a card", "How do I block my card, and can it be undone?",
+                    thread_id="q-block", approve=True)
+    assert "block_card" not in (out.get("tool_calls") or [])
+    assert toolkit.CARDS["CRD-5501"]["status"] == "active"
+
+
 def test_read_tools_need_no_approval(agent):
     out = agent.run("Which account am I on", "Am I on the Blue or the Plus account?",
                     thread_id="read-1")

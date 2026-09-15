@@ -90,7 +90,12 @@ _TOOLS = [
     (r"do not recognise|dont recognise|unknown charge|charge on my statement",
      ["get_transactions"]),
     (r"\bDSP-\d+|my dispute|lodged a dispute", ["get_dispute_status"]),
-    (r"block my card|please block|card was stolen|wallet was stolen", ["block_card"]),
+    # A write needs a request. This rule used to match "block my card" anywhere,
+    # so "How do I block my card?" selected block_card, and the eval — which
+    # approves every write — ran it on every build. Tool selection only scores
+    # tickets that expect a tool, and the route was right, so nothing saw it
+    # until unrequested writes were measured. Request phrasings only.
+    (r"please block|card was stolen|wallet was stolen", ["block_card"]),
     (r"am i on the|which account am i", ["get_account_profile"]),
     (r"was .{0,20}charged|did you charge|qualified for the waiver",
      ["get_transactions", "get_account_profile"]),

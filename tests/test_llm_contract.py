@@ -384,10 +384,25 @@ def test_triage_prompt_routes_account_questions_to_tools(retriever):
     llm = ScriptedLLM()
     KestrelAgent(retriever, llm).run("Monthly fee on Blue", "What is the monthly fee on Blue?",
                                      thread_id="c-triage-tools", approve=True)
-    system = llm.systems["triage"]
+    # Prompt files are hard-wrapped. Compare the words, not the line breaks, so
+    # rewrapping a paragraph cannot break a test about what it says — which is
+    # exactly how this assertion failed when run 6 rewrapped the rule.
+    system = " ".join(llm.systems["triage"].split())
     assert "Needing account data is not a reason to escalate" in system
     # Mandatory escalation still outranks it.
     assert "that still wins" in system
+
+
+def test_triage_prompt_keeps_the_write_tool_to_explicit_requests(retriever):
+    """Run 5: the account-data rule let triage select block_card for a question
+    about how blocking works, and the eval's auto-approval ran it. The rule
+    covers the read tools; a write needs a request."""
+    llm = ScriptedLLM()
+    KestrelAgent(retriever, llm).run("Monthly fee on Blue", "What is the monthly fee on Blue?",
+                                     thread_id="c-triage-write-rule", approve=True)
+    system = " ".join(llm.systems["triage"].split())
+    assert "Never select it to answer a question about blocking" in system
+    assert "A question about a write is answered from policy, not by performing it" in system
 
 
 def test_triage_still_does_not_get_the_untrusted_input_section(retriever):
