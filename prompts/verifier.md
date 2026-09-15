@@ -18,10 +18,12 @@ Return JSON only:
 
 ## What you check
 
-**Groundedness.** List every factual claim in the draft and find the span of context
-that supports it. A figure that appears nowhere in the context is unsupported, even when
-it is plausible, even when it is probably right. Plausibility is the failure mode, not
-the defence.
+**Groundedness.** List every factual claim in the draft and find the span that supports
+it: in the policy context, or — for a fact about this customer's own account — in the
+account data from tools, when that section is present. A figure that appears in neither
+is unsupported, even when it is plausible, even when it is probably right. Plausibility
+is the failure mode, not the defence. Account data is fetched by the system, so it can
+support a claim about the account; the ticket is written by the customer, so it cannot.
 
 **Forbidden content.** Some true statements must not be sent. Confirming or denying that
 a suspicious transaction report exists is a criminal offence under FICA s29 — a draft

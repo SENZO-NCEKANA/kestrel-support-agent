@@ -172,6 +172,19 @@ def _matrix_prompt(records, sections: tuple[str, ...]) -> str:
     return "\n\n## Escalation and routing matrix\n\n" + "\n\n".join(rendered) + "\n"
 
 
+def _account_data(state: TicketState) -> str:
+    """The tool results as the answer and verify nodes both see them.
+
+    One function so the two cannot drift apart. A draft built from account data
+    has to be judged against that same data: in run 6 the verifier sent back a
+    correct answer — the customer's tier and its benefits — because the tool
+    result that established the tier never reached it.
+    """
+    if not state.get("tool_results"):
+        return ""
+    return "--- account data (from tools) ---\n" + "\n".join(state["tool_results"])
+
+
 class KestrelAgent:
     def __init__(self, retriever: HybridRetriever, llm: LLM | None = None,
                  k: int = 6, require_approval: bool = True):
@@ -280,9 +293,9 @@ class KestrelAgent:
 
     def n_answer(self, state: TicketState) -> dict:
         parts = [state.get("context", "")]
-        if state.get("tool_results"):
-            parts.append("--- account data (from tools) ---\n"
-                         + "\n".join(state["tool_results"]))
+        account_data = _account_data(state)
+        if account_data:
+            parts.append(account_data)
         parts.append(injection.wrap_untrusted(state.get("subject", ""),
                                               state.get("body", "")))
         resp = self.llm.complete(self.prompts["answer"], "\n\n".join(parts), task="answer")
@@ -297,11 +310,19 @@ class KestrelAgent:
         # in the same untrusted envelope the other nodes use. Whether the ticket
         # should have been escalated is not its call; the override below enforces
         # that structurally.
-        ticket = injection.wrap_untrusted(state.get("subject", ""), state.get("body", ""))
-        payload = (f"--- context ---\n{state.get('context','')}\n\n"
-                   f"--- draft ---\n{state.get('draft','')}\n\n"
-                   f"--- ticket ---\n{ticket}")
-        resp = self.llm.complete(self.prompts["verify"], payload, task="verify")
+        #
+        # It is shown the account data the draft was written from, when there is
+        # any. A claim about the customer's own account can only be grounded there,
+        # never in the policy context and never in the ticket.
+        parts = [f"--- context ---\n{state.get('context','')}"]
+        account_data = _account_data(state)
+        if account_data:
+            parts.append(account_data)
+        parts.append(f"--- draft ---\n{state.get('draft','')}")
+        parts.append("--- ticket ---\n"
+                     + injection.wrap_untrusted(state.get("subject", ""),
+                                                state.get("body", "")))
+        resp = self.llm.complete(self.prompts["verify"], "\n\n".join(parts), task="verify")
 
         # The last gate before a customer sees the text, so the one thing it must
         # not do is fail silent. A verifier that returns prose, a list, or

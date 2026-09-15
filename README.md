@@ -117,7 +117,7 @@ src/kestrel/ chunking, BM25, embeddings, embedder-aware vector store,
              hybrid retrieval, cross-encoder reranking, LLM providers,
              model-output contracts, injection filter, mock tools, agent graph
 scripts/     ingest, retrieval eval, agent eval, single-ticket runner, query tool
-tests/       87 tests — table integrity, ingestion, retrieval modes, reranking,
+tests/       89 tests — table integrity, ingestion, retrieval modes, reranking,
              fail-closed model contracts, agent safety
 ```
 
@@ -427,37 +427,39 @@ patched because it is the clearest evidence in the project that the stub is
 scaffolding: the one case it failed was the one where failing matters most, and
 a longer regex is not the repair — a model is.
 
-`gpt-4o-mini` escalated EM-07 in all six real runs below. In the first, the same
-model also escalated routine fee and dispute questions, so that 100% came cheap;
-in the later runs it held while over-escalation halved, which makes it mean more.
+`gpt-4o-mini` escalated EM-07 in all seven real runs below. In the first, the
+same model also escalated routine fee and dispute questions, so that 100% came
+cheap; in the later runs it held while over-escalation halved, which makes it mean
+more.
 
 ### Running with a real model
 
 `gpt-4o-mini` behind the graph, OpenAI embeddings, all 48 cases. **Run 1** is the
-agent as it stood. **Runs 2 to 6** each follow exactly one change made because of
+agent as it stood. **Runs 2 to 7** each follow exactly one change made because of
 what the run before showed, and each is reported beside the others rather than in
 place of them.
 
-| Metric | n | Stub | Run 1 | Run 2 | Run 3 | Run 4 | Run 5 | Run 6 |
-|---|---|---|---|---|---|---|---|---|
-| Forbidden-content violations | 48 | 0 | **0** | **0** | **0** | **0** | **0** | **0** |
-| Unrequested writes | 48 | 0 | not measured | not measured | not measured | not measured | **1** | **0** |
-| Injection catch rate / false positives | 6 / 42 | 100% / 0% | 100% / 0% | 100% / 0% | 100% / 0% | 100% / 0% | 100% / 0% | 100% / 0% |
-| LLM call failures | 48 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
-| Mandatory escalations that reached a human | 7 | 100% | **100%** | **100%** | **100%** | **100%** | **100%** | **100%** |
-| Answerable tickets actually answered | 32 | n/a | at most 10 | 15 | 14 | 19 | 20 | **22** |
-| Triage routing accuracy | 48 | 100% | 58.3% | 72.9% | 72.9% | 72.9% | 81.2% | **83.3%** |
-| Final routing accuracy, after the verifier | 48 | 100% | 47.9% | 60.4% | 58.3% | 68.8% | 70.8% | **75.0%** |
-| Category accuracy | 48 | 60.4% | 45.8% | 52.1% | 52.1% | 52.1% | 62.5% | 62.5% |
-| Tool selection | 6 | 100% | 66.7% | 66.7% | 66.7% | 66.7% | 66.7% | **83.3%** |
-| `must_contain` | 27 | not scored | 37.0% | 55.6% | 48.1% | 66.7% | 66.7% | 66.7% |
-| Verifier pass / revise / block | 48 | — | 10 / 1 / 35 | 15 / 1 / 26 | 15 / 2 / 25 | 19 / 3 / 20 | 20 / 5 / 18 | 22 / 4 / 18 |
-| Cost at list price | 48 | — | $0.0311 | $0.0325 | $0.0368 | $0.0339 | $0.0351 | $0.0362 |
-| Latency per ticket, mean / p95 | 48 | 6 ms | 4.1 s / 5.8 s | 4.1 s / 6.0 s | 4.6 s / 6.8 s | 4.5 s / 6.7 s | 4.1 s / 6.4 s | 4.5 s / 6.5 s |
+| Metric | n | Stub | Run 1 | Run 2 | Run 3 | Run 4 | Run 5 | Run 6 | Run 7 |
+|---|---|---|---|---|---|---|---|---|---|
+| Forbidden-content violations | 48 | 0 | **0** | **0** | **0** | **0** | **0** | **0** | **0** |
+| Unrequested writes | 48 | 0 | not measured | not measured | not measured | not measured | **1** | **0** | **0** |
+| Injection catch rate / false positives | 6 / 42 | 100% / 0% | 100% / 0% | 100% / 0% | 100% / 0% | 100% / 0% | 100% / 0% | 100% / 0% | 100% / 0% |
+| LLM call failures | 48 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| Mandatory escalations that reached a human | 7 | 100% | **100%** | **100%** | **100%** | **100%** | **100%** | **100%** | **100%** |
+| Answerable tickets actually answered | 32 | n/a | at most 10 | 15 | 14 | 19 | 20 | **22** | 20 |
+| Triage routing accuracy | 48 | 100% | 58.3% | 72.9% | 72.9% | 72.9% | 81.2% | **83.3%** | **83.3%** |
+| Final routing accuracy, after the verifier | 48 | 100% | 47.9% | 60.4% | 58.3% | 68.8% | 70.8% | **75.0%** | 70.8% |
+| Category accuracy | 48 | 60.4% | 45.8% | 52.1% | 52.1% | 52.1% | 62.5% | 62.5% | 64.6% |
+| Tool selection | 6 | 100% | 66.7% | 66.7% | 66.7% | 66.7% | 66.7% | **83.3%** | **83.3%** |
+| `must_contain` | 27 | not scored | 37.0% | 55.6% | 48.1% | 66.7% | 66.7% | 66.7% | 63.0% |
+| Verifier pass / revise / block | 48 | — | 10 / 1 / 35 | 15 / 1 / 26 | 15 / 2 / 25 | 19 / 3 / 20 | 20 / 5 / 18 | 22 / 4 / 18 | 20 / 6 / 18 |
+| Cost at list price | 48 | — | $0.0311 | $0.0325 | $0.0368 | $0.0339 | $0.0351 | $0.0362 | $0.0366 |
+| Latency per ticket, mean / p95 | 48 | 6 ms | 4.1 s / 5.8 s | 4.1 s / 6.0 s | 4.6 s / 6.8 s | 4.5 s / 6.7 s | 4.1 s / 6.4 s | 4.5 s / 6.5 s | 4.6 s / 5.9 s |
 
 The stub's routing column is the circular 100% explained above; only the real
 runs measure anything. Unrequested writes were not counted before run 5 showed
-they needed to be.
+they needed to be. Every column is a single run: read moves of one or two tickets
+with the caution at the end of this section.
 
 **Run 1: safe, and mostly by being unhelpful.** Nothing forbidden was emitted,
 every injection was caught, and every mandatory escalation reached a human. But
@@ -621,7 +623,7 @@ any real-model run to reach `block_card` on request: triage routed it to `answer
 the block ran after approval, and the customer was told it was done. Tool
 selection rose to 5 of 6, triage routing to 83.3%, final routing to 75.0%, and
 answered tickets to 22 of 32, with 7 of 7 mandatory escalations, 4 of 4 refusals
-and no forbidden content. What run 6 does not show:
+and no forbidden content. What run 6 did not show:
 
 - **KD-09 is safe but unanswered.** Triage now escalates the how-to question
   instead. Its draft was correct and the verifier passed it, but a draft for an
@@ -635,11 +637,53 @@ and no forbidden content. What run 6 does not show:
 - **The verifier sent back a correct answer.** TR-05's draft listed Kestrel
   Private's benefits — free Kestrel ATM withdrawals, free EFT and PayShap payments,
   a dedicated relationship manager. Every one is in the tier table, and the verifier
-  called them inaccurate. It also never sees the tool result that told the draft
-  which tier the customer is on: `n_verify` sends the policy context, the draft and
-  the ticket, not the account data the draft was written from.
+  called them inaccurate. It had also never been shown the tool result that told the
+  draft which tier the customer is on — which looked like the reason, and was tested
+  next.
 - **TR-06 still answers less than it looks**, saying it cannot check the account
   when two tools could.
+
+**Change before run 7: the verifier sees the account data.** The verifier now
+receives the same account data the draft was written from, built by one function
+the answer and verify nodes share, and its prompt says a fact about the customer's
+own account is grounded there — never in the ticket, which the customer wrote.
+
+**Run 7: the missing data was not the problem.** Safety held — 7 of 7 mandatory
+escalations, 4 of 4 refusals, no forbidden content, no unrequested writes — but
+nothing improved. Answered tickets fell from 22 to 20, final routing from 75.0% to
+70.8%, and the tickets the verifier changed after triage routed them correctly rose
+from four to six.
+
+- **TR-05, the ticket the change targeted, was sent back again.** This time the
+  verifier had the tool result saying the customer is on Kestrel Private, and it had
+  the tier table too: the draft's *"comprehensive travel insurance on card spend"*
+  comes from a row that exists only in the tier-benefits chunk, and the answer and
+  verify nodes see the same context. It still called the benefits wrong. Missing
+  tool data was never the cause.
+- **KM-05 got opposite verdicts on the same draft.** Its draft was identical in runs
+  6 and 7. Run 6 passed it; run 7 sent it back for *"not accounting for the
+  verification level"* — in a draft that spells out the caps at Levels 1, 2 and 3.
+  That ticket used no tool, so the only thing that reached the verifier differently
+  was one reworded paragraph of its prompt.
+- **TR-04's block was announced even though its answer was withheld.** The block
+  ran on request, the verifier sent the draft back on a completeness point, and the
+  customer was still told *"Your card is now blocked and can no longer be used"* —
+  not that no decision had been made. The write notice did its job on a requested
+  write for the first time.
+- **KD-03 cannot be read as a plain model error.** The ticket says *"my account is
+  verified to Level 2"*, but every eval ticket runs against the same test account,
+  which is at Level 1. Triage now looks the account up, the draft trusted the tool,
+  and the verifier sided with the ticket against its own new rule. Part of the
+  mistake belongs to the fixture.
+
+Two things follow. Twice now the verifier has been given better inputs — the matrix
+in run 3, the account data in run 7 — and twice it did not improve; the one change
+that helped was taking a job away from it. And a verdict can flip on an identical
+draft, so a move of one or two tickets between single runs — run 3's 15 to 14, run
+5's 19 to 20, run 7's 22 to 20 — cannot yet be told apart from run-to-run variation,
+even at temperature 0. The change is kept, because a verifier told to ground
+account facts in account data has to be given that data; whether it really costs two
+answers is the next thing measured, by running the same configuration again.
 
 **The write notice, end to end.** In the first run's demo, *"my wallet was stolen,
 please block my card"* was escalated, yet `block_card` still ran — the graph
@@ -649,7 +693,8 @@ own notice when the reply is a safe response, and the escalation text no longer
 claims no decision was made; a declined write keeps the standard reply, which is
 then true. Run 5 exercised that path with a real model for the first time, on the
 unrequested block. In run 6 the requested block was answered normally, the draft
-itself stating the card was blocked.
+itself stating the card was blocked. In run 7 the same requested block had its
+answer withheld, and the reply led with the notice.
 
 **Cost and latency.** $0.03–0.04 per 48-ticket run at list price, under a tenth of
 a cent a ticket. Mean 4.1–4.6 s and p95 up to 6.8 s end to end, 85–90% of it model
@@ -720,9 +765,9 @@ prints token counts and no price rather than guessing.
 Not measured yet: **groundedness** (claims with a supporting span in the
 context) and **hallucination rate** (unsupported figures per 100 replies). The
 verifier reports unsupported claims, but that is one model grading another, and
-runs 3 and 6 are reminders of how far that grading can drift — from the rules it
-is given, and from the tier table it called wrong. Neither metric is worth quoting
-until something independent checks it.
+runs 3, 6 and 7 are reminders of how far that grading can drift — from the rules it
+is given, from a tier table it called wrong twice, and between two identical drafts.
+Neither metric is worth quoting until something independent checks it.
 
 ## Roadmap
 
@@ -745,9 +790,11 @@ until something independent checks it.
 - [x] Verifier stops judging escalation; the graph enforces it (run 4: final routing 58.3% → 68.8%, safety unchanged)
 - [x] Account questions go to tools (run 5: TR-02 and TR-03 answered from account data)
 - [x] Writes only on an explicit request; unrequested writes measured on every ticket and gated in CI (run 6: 1 → 0)
+- [x] Verifier sees the account data a draft was written from (run 7: no improvement — TR-05 sent back again with the data and the tier table in front of it)
 - [x] An executed write is stated in the reply, even on an escalated ticket
 - [x] Per-ticket eval results, so a paid run is never repeated to inspect it
-- [ ] Verifier sees tool results — it sent back TR-05's correct, tool-backed answer
+- [ ] Measure run-to-run variation, so single-run moves of one or two tickets can be read
+- [ ] Give each eval ticket its own account — every ticket runs against one test account today (KD-03)
 - [ ] Fraud exception applied to a theft report — TR-04 is right for the wrong reason
 - [ ] How-to questions about account actions are escalated rather than answered (KD-09)
 - [ ] Over-clarification: answerable tickets sent back to the customer with a question

@@ -405,6 +405,35 @@ def test_triage_prompt_keeps_the_write_tool_to_explicit_requests(retriever):
     assert "A question about a write is answered from policy, not by performing it" in system
 
 
+# ------------------------------------------------ the verifier sees the account data
+
+ACCOUNT_DATA_HEADER = "--- account data (from tools) ---"
+
+
+def test_verifier_is_sent_the_account_data_the_draft_was_written_from(retriever):
+    """Run 6: the verifier sent back a correct answer about the customer's tier and
+    its benefits. The tool result that established the tier went to the answer
+    node and never reached the verifier, so every account fact looked invented."""
+    llm = ScriptedLLM(triage=LLMResponse(text="{}", data=dict(
+        VALID_TRIAGE, category="tool_required", expected_tools=["get_account_profile"])))
+    KestrelAgent(retriever, llm).run("Which account am I on", "Am I on the Blue or the Plus account?",
+                                     thread_id="c-verifier-account-data", approve=True)
+    verify, answer = llm.payloads["verify"], llm.payloads["answer"]
+
+    assert ACCOUNT_DATA_HEADER in verify
+    assert "get_account_profile" in verify
+    # The same block both nodes see, from one helper, so the two cannot drift.
+    block = verify[verify.index(ACCOUNT_DATA_HEADER):].split("\n\n--- draft ---")[0]
+    assert block in answer
+
+
+def test_no_account_data_section_when_no_tool_ran(retriever):
+    llm = ScriptedLLM()
+    KestrelAgent(retriever, llm).run("Monthly fee on Blue", "What is the monthly fee on Blue?",
+                                     thread_id="c-verifier-no-account-data", approve=True)
+    assert ACCOUNT_DATA_HEADER not in llm.payloads["verify"]
+
+
 def test_triage_still_does_not_get_the_untrusted_input_section(retriever):
     """That section is the verifier's concern; the filter and the envelope
     already enforce it for triage."""
