@@ -37,6 +37,12 @@ tool only when the answer depends on this particular customer's data.
 
 A policy question whose answer is the same for every customer needs no tool.
 
+A question about this customer's own account that one of these tools answers is
+`tool_required` with route `answer`: name the tool, and the reply is written from what it
+returns. Needing account data is not a reason to escalate — the tool is how the agent
+gets it. Escalate only when the ticket also matches a mandatory-escalation trigger in the
+matrix below; that still wins.
+
 ## Rules
 
 The escalation and routing matrix appended at the end of this prompt is the authority on

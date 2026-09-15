@@ -374,6 +374,22 @@ def test_escalation_is_still_enforced_when_the_verifier_passes(retriever):
     assert DRAFT not in out["reply"]
 
 
+# ---------------------------------------------------- account questions go to tools
+
+def test_triage_prompt_routes_account_questions_to_tools(retriever):
+    """Runs 2-4: account-data tickets kept escalating. The matrix lists policy
+    topics an agent may answer and nothing about questions a tool answers from
+    the customer's own account, so needing account data read as a reason to hand
+    the ticket to a human."""
+    llm = ScriptedLLM()
+    KestrelAgent(retriever, llm).run("Monthly fee on Blue", "What is the monthly fee on Blue?",
+                                     thread_id="c-triage-tools", approve=True)
+    system = llm.systems["triage"]
+    assert "Needing account data is not a reason to escalate" in system
+    # Mandatory escalation still outranks it.
+    assert "that still wins" in system
+
+
 def test_triage_still_does_not_get_the_untrusted_input_section(retriever):
     """That section is the verifier's concern; the filter and the envelope
     already enforce it for triage."""
