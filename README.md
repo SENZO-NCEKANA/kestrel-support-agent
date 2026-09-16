@@ -444,26 +444,26 @@ in the later runs it held while over-escalation halved, which makes it mean more
 ### Running with a real model
 
 `gpt-4o-mini` behind the graph, OpenAI embeddings, all 48 cases. **Run 1** is the
-agent as it stood. **Runs 2 to 8** each follow exactly one change made because of
+agent as it stood. **Runs 2 to 9** each follow exactly one change made because of
 what the run before showed, and each is reported beside the others rather than in
 place of them.
 
-| Metric | n | Stub | Run 1 | Run 2 | Run 3 | Run 4 | Run 5 | Run 6 | Run 7 | Run 8 |
-|---|---|---|---|---|---|---|---|---|---|---|
-| Forbidden-content violations | 48 | 0 | **0** | **0** | **0** | **0** | **0** | **0** | **0** | **0** |
-| Unrequested writes | 48 | 0 | not measured | not measured | not measured | not measured | **1** | **0** | **0** | **0** |
-| Injection catch rate / false positives | 6 / 42 | 100% / 0% | 100% / 0% | 100% / 0% | 100% / 0% | 100% / 0% | 100% / 0% | 100% / 0% | 100% / 0% | 100% / 0% |
-| LLM call failures | 48 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
-| Mandatory escalations that reached a human | 7 | 100% | **100%** | **100%** | **100%** | **100%** | **100%** | **100%** | **100%** | **100%** |
-| Answerable tickets actually answered | 32 | n/a | at most 10 | 15 | 14 | 19 | 20 | 22 | 20 | **24** |
-| Triage routing accuracy | 48 | 100% | 58.3% | 72.9% | 72.9% | 72.9% | 81.2% | **83.3%** | **83.3%** | **83.3%** |
-| Final routing accuracy, after the verifier | 48 | 100% | 47.9% | 60.4% | 58.3% | 68.8% | 70.8% | 75.0% | 70.8% | **79.2%** |
-| Category accuracy | 48 | 60.4% | 45.8% | 52.1% | 52.1% | 52.1% | 62.5% | 62.5% | 64.6% | 60.4% |
-| Tool selection | 6 | 100% | 66.7% | 66.7% | 66.7% | 66.7% | 66.7% | **83.3%** | **83.3%** | **83.3%** |
-| `must_contain` | 27 | not scored | 37.0% | 55.6% | 48.1% | 66.7% | 66.7% | 66.7% | 63.0% | **70.4%** |
-| Verifier pass / revise / block | 48 | — | 10 / 1 / 35 | 15 / 1 / 26 | 15 / 2 / 25 | 19 / 3 / 20 | 20 / 5 / 18 | 22 / 4 / 18 | 20 / 6 / 18 | 24 / 2 / 18 |
-| Cost at list price | 48 | — | $0.0311 | $0.0325 | $0.0368 | $0.0339 | $0.0351 | $0.0362 | $0.0366 | $0.2432 |
-| Latency per ticket, mean / p95 | 48 | 6 ms | 4.1 s / 5.8 s | 4.1 s / 6.0 s | 4.6 s / 6.8 s | 4.5 s / 6.7 s | 4.1 s / 6.4 s | 4.5 s / 6.5 s | 4.6 s / 5.9 s | 4.0 s / 5.3 s |
+| Metric | n | Stub | Run 1 | Run 2 | Run 3 | Run 4 | Run 5 | Run 6 | Run 7 | Run 8 | Run 9 |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| Forbidden-content violations | 48 | 0 | **0** | **0** | **0** | **0** | **0** | **0** | **0** | **0** | **0** |
+| Unrequested writes | 48 | 0 | not measured | not measured | not measured | not measured | **1** | **0** | **0** | **0** | **0** |
+| Injection catch rate / false positives | 6 / 42 | 100% / 0% | 100% / 0% | 100% / 0% | 100% / 0% | 100% / 0% | 100% / 0% | 100% / 0% | 100% / 0% | 100% / 0% | 100% / 0% |
+| LLM call failures | 48 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| Mandatory escalations that reached a human | 7 | 100% | **100%** | **100%** | **100%** | **100%** | **100%** | **100%** | **100%** | **100%** | **100%** |
+| Answerable tickets actually answered | 32 | n/a | at most 10 | 15 | 14 | 19 | 20 | 22 | 20 | **24** | 20 |
+| Triage routing accuracy | 48 | 100% | 58.3% | 72.9% | 72.9% | 72.9% | 81.2% | **83.3%** | **83.3%** | **83.3%** | **83.3%** |
+| Final routing accuracy, after the verifier | 48 | 100% | 47.9% | 60.4% | 58.3% | 68.8% | 70.8% | 75.0% | 70.8% | **79.2%** | 70.8% |
+| Category accuracy | 48 | 60.4% | 45.8% | 52.1% | 52.1% | 52.1% | 62.5% | 62.5% | 64.6% | 60.4% | 62.5% |
+| Tool selection | 6 | 100% | 66.7% | 66.7% | 66.7% | 66.7% | 66.7% | **83.3%** | **83.3%** | **83.3%** | **83.3%** |
+| `must_contain` | 27 | not scored | 37.0% | 55.6% | 48.1% | 66.7% | 66.7% | 66.7% | 63.0% | **70.4%** | 63.0% |
+| Verifier pass / revise / block | 48 | — | 10 / 1 / 35 | 15 / 1 / 26 | 15 / 2 / 25 | 19 / 3 / 20 | 20 / 5 / 18 | 22 / 4 / 18 | 20 / 6 / 18 | 24 / 2 / 18 | 20 / 6 / 18 |
+| Cost at list price | 48 | — | $0.0311 | $0.0325 | $0.0368 | $0.0339 | $0.0351 | $0.0362 | $0.0366 | $0.2432 | $0.0366 |
+| Latency per ticket, mean / p95 | 48 | 6 ms | 4.1 s / 5.8 s | 4.1 s / 6.0 s | 4.6 s / 6.8 s | 4.5 s / 6.7 s | 4.1 s / 6.4 s | 4.5 s / 6.5 s | 4.6 s / 5.9 s | 4.0 s / 5.3 s | 3.7 s / 4.7 s |
 
 The stub's routing column is the circular 100% explained above; only the real
 runs measure anything. Unrequested writes were not counted before run 5 showed
@@ -764,6 +764,8 @@ as a floor on the noise rather than a measure of it. Against it:
 The findings this README leans on hardest — mandatory escalation holds, and a write
 happens only when asked for — are the ones the noise does not touch. What does move
 from run to run is the verifier's verdict; in three runs, triage's route never did.
+Read that last point with run 9's caveat below: these three runs, taken back to back,
+also made identical tool calls, and two later runs did not.
 
 ### Run 8: a stronger verifier, the first change to clear the noise
 
@@ -830,6 +832,61 @@ what it buys and what it costs are both now measured rather than assumed. And th
 one run against three: its margin is larger than the same-configuration spread on every
 metric that moved, which is what the noise floor was for, but three samples of the
 baseline and one of the change is still the thinnest evidence in this section.
+
+### Run 9: every ticket gets its own account, and nothing moves
+
+Runs 1 to 8 ran all 48 tickets against one account — ACC-1001, Kestrel Private,
+verified to Level 1. KD-03 opens "my account is verified to Level 2", so the ticket
+and the tools contradicted each other and nobody in the chain could be right. TR-03
+quoted dispute DSP-40192, which belongs to a different account. TR-05 asked "Blue or
+Plus?" of an account that was neither. Run 9 gives 16 tickets the fixture account
+their own text describes, back on the default `gpt-4o-mini` everywhere so the numbers
+compare to the noise floor rather than to run 8.
+
+| Metric | Run 7 config, three runs | Run 9 |
+|---|---|---|
+| Answerable tickets answered, of 32 | 19–21 | 20 |
+| Final routing accuracy | 68.8–72.9% | 70.8% |
+| `must_contain` | 55.6–66.7% | 63.0% |
+| Verifier pass / revise / block | 19–21 / 5–7 / 18 | 20 / 6 / 18 |
+| Cost per run | $0.0366 | $0.0366 |
+
+**Every metric landed inside the noise band.** Safety held again — 7 of 7 mandatory
+escalations, 4 of 4 refusals, no forbidden content, no unrequested writes, no failed
+calls — and not one triage route changed. Two tickets changed final route against the
+baseline, KM-01 and TR-04, which are the same two that change when nothing changes at
+all.
+
+**The reason is worth more than the result.** Ten of the sixteen tickets now point at
+an account other than the old default, and **only two of those ten fetch anything** —
+TR-03 and TR-05. For the other eight, no tool runs, so the account never enters a
+prompt and re-pointing it cannot change a word. The fixtures are now coherent, which
+is worth having, but coherence that nothing reads does not move a score.
+
+- **TR-03** now runs as the account that actually owns the dispute it quotes. It
+  passed before and passes now; what changed is that the answer is no longer right by
+  accident.
+- **TR-05** fetched the Plus profile and answered *"You are on the Kestrel Plus
+  account"* — a real answer to the question asked, where before it was told "Private",
+  which was neither option. The verifier still sent it back, but on a new objection:
+  the draft "should not include the specific benefits... as the customer did not
+  request this". That is a scope complaint, not a groundedness one, and scope is not
+  the job run 4 narrowed the verifier to.
+- **KD-03, the ticket that motivated the change, still fails.** Triage fetched nothing
+  on this run, so the draft asserted "as your account is verified to Level 2" from the
+  ticket alone, and the verifier sent it back for exactly that — the level was assumed,
+  not confirmed. The fixture was necessary and not sufficient. What binds now is that
+  triage does not fetch the profile for a question whose answer turns on the profile.
+
+**And a blind spot surfaced.** Tool selection is scored only on the six tickets that
+expect a tool, so a *read* tool running on a ticket that expects none is invisible —
+the same shape as the unrequested write that hid until run 6, minus the consequences.
+It matters because it moves answers: KD-03 fetched the account profile in all three
+baseline runs and in neither run 8 nor run 9, and nothing that changed in those runs
+can reach triage, which sees only the ticket. So the tool set drifts between sittings
+even though it never varied within the three runs measured back to back — a caveat on
+the noise floor, which sampled three runs in one sitting and may therefore be a floor
+under a floor.
 
 **The write notice, end to end.** In the first run's demo, *"my wallet was stolen,
 please block my card"* was escalated, yet `block_card` still ran — the graph
@@ -948,7 +1005,9 @@ Neither metric is worth quoting until something independent checks it.
 - [x] Verifier on a stronger model, measurable and priced per model (run 8: `gpt-4o` on the verify node alone — 24 of 32 answered and final routing 79.2%, both past the noise floor, at 6.6x the cost; default stays `gpt-4o-mini`)
 - [x] An executed write is stated in the reply, even on an escalated ticket
 - [x] Per-ticket eval results, so a paid run is never repeated to inspect it
-- [x] Each eval ticket runs against the account its own text describes (16 of 48 name one; runs 1–8 all ran against a single Private, Level 1 account)
+- [x] Each eval ticket runs against the account its own text describes (16 of 48 name one; runs 1–8 all ran against a single Private, Level 1 account — run 9: the fixtures are coherent, and no metric moved, because only 2 of the re-pointed tickets fetch anything)
+- [ ] Measure read-tool calls on tickets that expect none — tool selection is scored only where a tool is expected, so triage fetching the account profile on one run and not the next is invisible, exactly as the unrequested write was before run 6
+- [ ] Triage fetches the account profile when the answer turns on tier or verification level — KD-03, TP-02 and KM-05 assert the customer's level from the ticket and fetch nothing, and the verifier is right to send them back
 - [ ] Fraud exception applied to a theft report — TR-04 is right for the wrong reason
 - [ ] How-to questions about account actions are escalated rather than answered (KD-09)
 - [ ] Over-clarification: answerable tickets sent back to the customer with a question
