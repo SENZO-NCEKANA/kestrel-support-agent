@@ -23,7 +23,7 @@ from kestrel.agent import SAFE_RESPONSES, KestrelAgent
 from kestrel.contracts import parse_triage, parse_verdict
 from kestrel.embeddings import HashEmbedder
 from kestrel.ingest import ingest
-from kestrel.llm import LLMResponse, StubLLM
+from kestrel.llm import LLMResponse, StubLLM, get_llm
 from kestrel.retrieval import HybridRetriever
 from kestrel.store import SQLiteStore
 
@@ -441,3 +441,55 @@ def test_triage_still_does_not_get_the_untrusted_input_section(retriever):
     KestrelAgent(retriever, llm).run("Monthly fee on Blue", "What is the monthly fee on Blue?",
                                      thread_id="c-triage-no-untrusted", approve=True)
     assert "### Untrusted Input" not in llm.systems["triage"]
+
+
+# ------------------------------------------------- the verifier on its own model
+
+def test_verifier_calls_go_to_the_verifier_model_and_nothing_else(retriever):
+    """A stronger verifier is tested on that node alone. If triage or the answer
+    reached it too, a change in the results could not be put down to the
+    verifier."""
+    main, verifier = ScriptedLLM(), ScriptedLLM()
+    KestrelAgent(retriever, main, verifier_llm=verifier).run(
+        "Monthly fee on Blue", "What is the monthly fee on Blue?",
+        thread_id="c-verifier-model-split", approve=True)
+    assert main.calls == ["triage", "answer"]
+    assert verifier.calls == ["verify"]
+
+
+def test_without_a_verifier_model_one_model_serves_every_node(retriever):
+    llm = ScriptedLLM()
+    KestrelAgent(retriever, llm).run("Monthly fee on Blue", "What is the monthly fee on Blue?",
+                                     thread_id="c-verifier-model-shared", approve=True)
+    assert llm.calls == ["triage", "answer", "verify"]
+
+
+def test_each_call_record_names_the_model_that_served_it(retriever):
+    """The eval prices each call at its own model's rate. Without the model on the
+    record, verifier tokens on gpt-4o would be priced as gpt-4o-mini, and the spend
+    cap would let a run cost far more than it reports."""
+    main, verifier = ScriptedLLM(), ScriptedLLM()
+    main.model, verifier.model = "small-model", "large-model"
+    out = KestrelAgent(retriever, main, verifier_llm=verifier).run(
+        "Monthly fee on Blue", "What is the monthly fee on Blue?",
+        thread_id="c-verifier-model-records", approve=True)
+    assert {c["task"]: c["model"] for c in out["llm_calls"]} == {
+        "triage": "small-model", "answer": "small-model", "verify": "large-model"}
+
+
+def test_a_failing_verifier_model_still_blocks(retriever):
+    """A separate client is a separate thing to fail. Its outage fails closed like
+    any other verifier call."""
+    verifier = ScriptedLLM(verify=LLMResponse(ok=False, error="RateLimitError: 429"))
+    out = KestrelAgent(retriever, ScriptedLLM(), verifier_llm=verifier).run(
+        "Monthly fee on Blue", "What is the monthly fee on Blue?",
+        thread_id="c-verifier-model-down", approve=True)
+    assert DRAFT not in out["reply"]
+    assert out["route"] == "escalate"
+
+
+def test_a_verifier_model_is_refused_under_the_stub():
+    """Accepting a model name and ignoring it would label the keyword stub's
+    verdicts as the stronger model's."""
+    with pytest.raises(ValueError):
+        get_llm("stub", model="gpt-4o")

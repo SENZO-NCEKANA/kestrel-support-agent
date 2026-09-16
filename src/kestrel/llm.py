@@ -290,10 +290,16 @@ class OpenAILLM:
                            latency_ms=(time.perf_counter() - start) * 1000)
 
 
-def get_llm(provider: str | None = None) -> LLM:
+def get_llm(provider: str | None = None, model: str | None = None) -> LLM:
+    """`model` overrides LLM_MODEL for this one client, so one node can run on a
+    different model from the rest."""
     provider = provider or os.environ.get("LLM_PROVIDER", "stub")
     if provider == "openai":
-        return OpenAILLM()
+        return OpenAILLM(model)
     if provider == "stub":
+        # The stub is not a model. Accepting a model name and ignoring it would
+        # label a keyword router's verdicts as a stronger model's.
+        if model:
+            raise ValueError(f"model {model!r} needs a real provider; the stub is not a model")
         return StubLLM()
     raise ValueError(f"unknown LLM provider: {provider}")

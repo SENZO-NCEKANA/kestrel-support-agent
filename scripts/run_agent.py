@@ -54,6 +54,8 @@ def main():
     ap.add_argument("--db", default="kestrel.db")
     ap.add_argument("--provider", default=None, help="embedder: hash | openai")
     ap.add_argument("--llm", default=None, help="LLM: stub | openai")
+    ap.add_argument("--verifier-model", default=None,
+                    help="run the verifier on this model (or LLM_VERIFIER_MODEL)")
     ap.add_argument("--reranker", default=None, help="noop | cross-encoder")
     ap.add_argument("--k", type=int, default=6)
     group = ap.add_mutually_exclusive_group()
@@ -76,7 +78,7 @@ def main():
 
     agent = build_agent(db=args.db, provider=args.provider,
                         llm_provider=args.llm, k=args.k,
-                        reranker=args.reranker)
+                        reranker=args.reranker, verifier_model=args.verifier_model)
 
     approve = True if args.approve else (False if args.deny else None)
 
@@ -85,7 +87,11 @@ def main():
     print(f"BODY     {body}")
     if note:
         print(f"TESTS    {note}")
-    print(f"LLM      {agent.llm.name}   embedder {agent.retriever.embedder.name}"
+    model = getattr(agent.llm, "model", "")
+    verifier = getattr(agent.verifier_llm, "model", "")
+    models = (f" ({model}" + (f", verifier {verifier}" if verifier != model else "") + ")"
+              if model else "")
+    print(f"LLM      {agent.llm.name}{models}   embedder {agent.retriever.embedder.name}"
           f"   reranker {agent.retriever.reranker.name}")
     print("=" * 72)
 
@@ -142,6 +148,9 @@ def main():
         else:
             spend = "no tokens reported"
         print(f"MODEL    {len(calls)} calls   {elapsed:.0f} ms   {spend}")
+        # Name each call's model when the nodes do not share one.
+        if len({c.get("model") for c in calls}) > 1:
+            print("         " + "   ".join(f"{c['task']} {c['model']}" for c in calls))
         failed = [c for c in calls if not c["ok"]]
         for c in failed:
             print(f"         ✗ {c['task']} failed: {c['error']}")

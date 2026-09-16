@@ -10,6 +10,7 @@ burying the other 42 tickets in review.
 
     python3 scripts/eval_agent.py
     python3 scripts/eval_agent.py --llm openai --max-cost 0.50
+    python3 scripts/eval_agent.py --llm openai --verifier-model gpt-4o --max-cost 0.50
 
 Metrics are split into two groups deliberately. Some are real measurements under
 the offline stub. Some are not measurable at all without a model, and reporting
@@ -78,6 +79,17 @@ def list_price(price: tuple[float, float] | None, prompt: int, completion: int) 
     return (prompt * price[0] + completion * price[1]) / 1e6
 
 
+def run_cost(tokens_by_model: dict[str, list[int]]) -> float | None:
+    """List-price spend across every model a run called, each at its own rate.
+
+    None if any model is unpriced. A sum that silently skipped one would read as
+    the whole cost, and a verifier on gpt-4o pays about 17x the rate of mini.
+    """
+    if any(m not in PRICES for m in tokens_by_model):
+        return None
+    return sum(list_price(PRICES[m], p, o) for m, (p, o) in tokens_by_model.items())
+
+
 def listed(title: str, rows: list[str]) -> None:
     if not rows:
         return
@@ -111,6 +123,8 @@ def main():
     ap.add_argument("--db", default="kestrel.db")
     ap.add_argument("--provider", default=None, help="embedder: hash | openai")
     ap.add_argument("--llm", default=None, help="LLM: stub | openai")
+    ap.add_argument("--verifier-model", default=None,
+                    help="run the verifier on this model (or LLM_VERIFIER_MODEL)")
     ap.add_argument("--reranker", default=None, help="noop | cross-encoder")
     ap.add_argument("--k", type=int, default=6)
     ap.add_argument("--max-violations", type=int, default=0,
@@ -131,25 +145,31 @@ def main():
     toolkit.reset_fixtures()
     agent = build_agent(db=args.db, provider=args.provider,
                         llm_provider=args.llm, k=args.k,
-                        reranker=args.reranker)
-    cases = [json.loads(l) for l in Path(args.evals).read_text().splitlines() if l.strip()]
+                        reranker=args.reranker, verifier_model=args.verifier_model)
+    cases =[json.loads(l) for l in Path(args.evals).read_text().splitlines() if l.strip()]
 
     is_stub = agent.llm.name == "stub"
     model = getattr(agent.llm, "model", "")
-    price = PRICES.get(model)
+    verifier_model = getattr(agent.verifier_llm, "model", "")
+    unpriced = sorted({m for m in (model, verifier_model) if m and m not in PRICES})
 
-    # A spending cap that cannot price the model would let the run spend without
-    # limit while appearing capped. Refuse rather than pretend.
-    if args.max_cost is not None and not is_stub and price is None:
-        print(f"Refusing to start: --max-cost is set but {model!r} is not in PRICES, "
-              "so spend cannot be tracked. Add its list price or drop the cap.")
+    # A spending cap that cannot price every model it pays for would let the run
+    # spend without limit while appearing capped. Refuse rather than pretend.
+    if args.max_cost is not None and not is_stub and unpriced:
+        print(f"Refusing to start: --max-cost is set but PRICES has no list price for "
+              f"{', '.join(map(repr, unpriced))}, so spend cannot be tracked. "
+              "Add it or drop the cap.")
         sys.exit(2)
+
+    # A verifier on its own model is a different configuration, so its per-ticket
+    # file says so in the name.
+    run_label = agent.llm.name + (f"-verify-{verifier_model}" if verifier_model != model else "")
 
     # Written per ticket and flushed, so a run stopped by the cap or by a crash
     # still leaves every ticket it paid for on disk.
     out_path = Path(args.out) if args.out else (
         None if is_stub else
-        ROOT / "runs" / f"agent-eval-{agent.llm.name}-{datetime.now(timezone.utc):%Y%m%d-%H%M%S}.jsonl"
+        ROOT / "runs" / f"agent-eval-{run_label}-{datetime.now(timezone.utc):%Y%m%d-%H%M%S}.jsonl"
     )
     out_file = None
     if out_path:
@@ -168,6 +188,7 @@ def main():
     model_latencies: list[float] = []
     call_failures: list[tuple[str, str, str]] = []
     prompt_tokens = completion_tokens = 0
+    tokens_by_model: dict[str, list[int]] = defaultdict(lambda: [0, 0])
     verdicts: Counter = Counter()
     unsupported_claims = unsupported_tickets = 0
     stopped = ""
@@ -194,6 +215,9 @@ def main():
         for c in calls:
             prompt_tokens += c["usage"].get("prompt_tokens", 0)
             completion_tokens += c["usage"].get("completion_tokens", 0)
+            used = tokens_by_model[c.get("model", model)]
+            used[0] += c["usage"].get("prompt_tokens", 0)
+            used[1] += c["usage"].get("completion_tokens", 0)
             if not c["ok"]:
                 call_failures.append((case["id"], c["task"], c["error"]))
 
@@ -295,7 +319,7 @@ def main():
         # -- spend cap. Checked after the ticket, so the ticket that crosses the
         #    cap is counted, not discarded: its tokens are already spent. Covers
         #    chat tokens; query embeddings cost about a millionth of a dollar each.
-        spend = list_price(price, prompt_tokens, completion_tokens)
+        spend = run_cost(tokens_by_model)
         if args.max_cost is not None and not is_stub and spend > args.max_cost:
             stopped = (f"STOPPED: spend cap reached — ${spend:.4f} list price after "
                        f"{n} of {len(cases)} tickets (cap ${args.max_cost:.2f}). "
@@ -305,7 +329,9 @@ def main():
     if out_file:
         out_file.close()
 
-    print(f"\nAgent eval — llm={agent.llm.name} embedder={agent.retriever.embedder.name} "
+    models = "" if is_stub else f" model={model}" + (
+        f" verifier={verifier_model}" if verifier_model != model else "")
+    print(f"\nAgent eval — llm={agent.llm.name}{models} embedder={agent.retriever.embedder.name} "
           f"reranker={agent.retriever.reranker.name} k={args.k}")
     print(f"cases={n} of {len(cases)}\n")
     if stopped:
@@ -395,13 +421,18 @@ def main():
     else:
         print(f"  tokens                      {total_tokens:8,d} "
               f"({prompt_tokens:,} in / {completion_tokens:,} out)")
-        if price:
-            cost = list_price(price, prompt_tokens, completion_tokens)
+        cost = run_cost(tokens_by_model)
+        if cost is not None:
             print(f"  cost per ticket             ${cost / n:8.5f}   "
-                  f"(${cost:.4f} for {n} tickets, {model} list price)")
+                  f"(${cost:.4f} for {n} tickets, "
+                  f"{', '.join(sorted(tokens_by_model))} list price)")
+            # Two models at rates about 17x apart: the split is part of the result.
+            if len(tokens_by_model) > 1:
+                for m, (p, o) in sorted(tokens_by_model.items()):
+                    print(f"    {m:<26}${list_price(PRICES[m], p, o):8.4f}   ({p + o:,} tokens)")
         else:
-            print(f"  cost per ticket             unpriced — {model!r} is not in"
-                  " PRICES; add it or read the token counts directly")
+            print(f"  cost per ticket             unpriced — PRICES has no list price for"
+                  f" {', '.join(map(repr, unpriced))}; add it or read the token counts")
 
     if out_path:
         print(f"\n  per-case results: {out_path}")

@@ -187,9 +187,15 @@ def _account_data(state: TicketState) -> str:
 
 class KestrelAgent:
     def __init__(self, retriever: HybridRetriever, llm: LLM | None = None,
-                 k: int = 6, require_approval: bool = True):
+                 k: int = 6, require_approval: bool = True,
+                 verifier_llm: LLM | None = None):
         self.retriever = retriever
         self.llm = llm or get_llm()
+        # The verifier can run on a different model from triage and the answer.
+        # Twice it was given better inputs and did not improve (runs 3 and 7); the
+        # one change that helped took a job away from it. A stronger model on this
+        # node alone tests whether the small model is the bias.
+        self.verifier_llm = verifier_llm or self.llm
         self.k = k
         self.require_approval = require_approval
         records = retriever.all_records
@@ -237,7 +243,7 @@ class KestrelAgent:
             "injection_flag": verdict.flagged,
             "injection_labels": verdict.labels,
             "tool_calls": decision.tools,
-            "llm_calls": [_call_record("triage", resp)],
+            "llm_calls": [_call_record("triage", resp, self.llm)],
             "trace": trace,
         }
 
@@ -300,7 +306,7 @@ class KestrelAgent:
                                               state.get("body", "")))
         resp = self.llm.complete(self.prompts["answer"], "\n\n".join(parts), task="answer")
         return {"draft": resp.text,
-                "llm_calls": [_call_record("answer", resp)],
+                "llm_calls": [_call_record("answer", resp, self.llm)],
                 "trace": [f"answer: drafted {len(resp.text)} chars"]}
 
     def n_verify(self, state: TicketState) -> dict:
@@ -322,7 +328,8 @@ class KestrelAgent:
         parts.append("--- ticket ---\n"
                      + injection.wrap_untrusted(state.get("subject", ""),
                                                 state.get("body", "")))
-        resp = self.llm.complete(self.prompts["verify"], "\n\n".join(parts), task="verify")
+        resp = self.verifier_llm.complete(self.prompts["verify"], "\n\n".join(parts),
+                                          task="verify")
 
         # The last gate before a customer sees the text, so the one thing it must
         # not do is fail silent. A verifier that returns prose, a list, or
@@ -336,7 +343,7 @@ class KestrelAgent:
             verdict = dict(verdict, verdict="block", missing_escalation=True)
 
         return {"verdict": verdict,
-                "llm_calls": [_call_record("verify", resp)],
+                "llm_calls": [_call_record("verify", resp, self.verifier_llm)],
                 "trace": [f"verify: {verdict.get('verdict')}"]}
 
     def n_finalise(self, state: TicketState) -> dict:
@@ -433,14 +440,18 @@ class KestrelAgent:
         return out
 
 
-def _call_record(task: str, resp: LLMResponse) -> dict:
+def _call_record(task: str, resp: LLMResponse, llm: LLM) -> dict:
     """One row of per-ticket LLM instrumentation.
 
     A plain dict rather than a dataclass for the same reason `n_retrieve` keeps
     Hit objects out of state: the checkpointer serialises state on every step,
     and project-internal types there are what langgraph warns about.
+
+    `model` names what served the call, because the nodes need not share one and
+    the eval prices each call at its own model's rate.
     """
-    return {"task": task, "ok": resp.ok, "latency_ms": round(resp.latency_ms, 2),
+    return {"task": task, "model": getattr(llm, "model", "") or llm.name,
+            "ok": resp.ok, "latency_ms": round(resp.latency_ms, 2),
             "usage": dict(resp.usage), "error": resp.error}
 
 
@@ -454,12 +465,17 @@ def _find_dispute_ref(state: TicketState) -> str:
 def build_agent(db: str = "kestrel.db", provider: str | None = None,
                 llm_provider: str | None = None, k: int = 6,
                 require_approval: bool = True,
-                reranker: str | None = None) -> KestrelAgent:
+                reranker: str | None = None,
+                verifier_model: str | None = None) -> KestrelAgent:
+    import os
+
     from .embeddings import get_embedder
     from .rerank import get_reranker
     from .store import get_store
 
     retriever = HybridRetriever(get_store("sqlite", path=db), get_embedder(provider),
                                 get_reranker(reranker))
+    verifier_model = verifier_model or os.environ.get("LLM_VERIFIER_MODEL")
+    verifier_llm = get_llm(llm_provider, model=verifier_model) if verifier_model else None
     return KestrelAgent(retriever, get_llm(llm_provider), k=k,
-                        require_approval=require_approval)
+                        require_approval=require_approval, verifier_llm=verifier_llm)

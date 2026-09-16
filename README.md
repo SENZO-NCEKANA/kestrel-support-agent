@@ -104,6 +104,10 @@ Unset the three variables to go back to the offline path.
 - `LLM_MODEL` (default `gpt-4o-mini`), `LLM_TIMEOUT` (default 30s) and
   `LLM_MAX_RETRIES` (default 2) tune the client. A call that still fails escalates
   its ticket instead of crashing the run.
+- `LLM_VERIFIER_MODEL`, or `--verifier-model` on either script, runs the verifier
+  on a different model from triage and the answer. Every call records the model
+  that served it, and the eval prices each call at that model's list price, so the
+  spend cap still holds when the rates differ.
 - `429 insufficient_quota` means the key is valid and the account has no credits.
   Listing models is free, so it is not a billing check. A failed ingest writes no
   vectors and no fingerprint; add credits and re-run it.
