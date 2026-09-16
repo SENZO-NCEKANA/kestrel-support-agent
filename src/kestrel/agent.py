@@ -520,6 +520,22 @@ class KestrelAgent:
             out = self.graph.invoke(Command(resume=approve), config=config)
         return out
 
+    def resume(self, thread_id: str, approved: bool) -> dict:
+        """Resume a thread stopped at the approval interrupt, with a decision.
+
+        `run` always starts a ticket from the beginning, which is right when the
+        decision is known up front. It is wrong when the approval arrives later
+        and separately — a second `run` would hand a fresh input to a graph that
+        is paused mid-step. The demo server needs exactly that: the interrupt is
+        one HTTP request and the decision is the next.
+        """
+        from langgraph.types import Command
+
+        return self.graph.invoke(
+            Command(resume=approved),
+            config={"configurable": {"thread_id": thread_id}},
+        )
+
 
 def _call_record(task: str, resp: LLMResponse, llm: LLM) -> dict:
     """One row of per-ticket LLM instrumentation.

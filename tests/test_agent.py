@@ -145,6 +145,32 @@ def test_block_card_declined_leaves_card_active(agent):
     assert any("DENIED" in t for t in out["trace"])
 
 
+def test_resume_carries_the_decision_to_a_waiting_thread(agent):
+    """`run` starts a ticket from the beginning, which is wrong when the approval
+    arrives separately — a second `run` would hand a fresh input to a graph paused
+    mid-step. `resume` exists for the case where the interrupt is one request and
+    the decision is the next, which is how any UI must work."""
+    toolkit.reset_fixtures()
+    out = agent.run("Card stolen", "My wallet was stolen. Please block my card.",
+                    thread_id="resume-yes", approve=None)
+    assert "__interrupt__" in out
+    assert toolkit.CARDS["CRD-5501"]["status"] == "active"
+
+    resumed = agent.resume("resume-yes", True)
+    assert "__interrupt__" not in resumed
+    assert toolkit.CARDS["CRD-5501"]["status"] == "blocked"
+    assert resumed.get("reply")
+
+
+def test_resume_can_also_decline(agent):
+    toolkit.reset_fixtures()
+    agent.run("Card stolen", "My wallet was stolen. Please block my card.",
+              thread_id="resume-no", approve=None)
+    resumed = agent.resume("resume-no", False)
+    assert toolkit.CARDS["CRD-5501"]["status"] == "active"
+    assert any("DENIED" in t for t in resumed["trace"])
+
+
 def test_a_question_about_blocking_does_not_block_the_card(agent):
     """Regression: the stub's rule matched "block my card" anywhere, so a how-to
     question about blocking selected block_card, and the eval — which approves

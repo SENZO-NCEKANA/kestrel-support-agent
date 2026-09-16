@@ -97,6 +97,26 @@ python3 scripts/run_agent.py --db kestrel-openai.db --provider openai --llm open
     --verifier-model gpt-4o --scenario 1
 ```
 
+### Watch it in a browser
+
+```bash
+python3 scripts/serve_demo.py          # http://127.0.0.1:8000 — offline, free, no key
+```
+
+Standard library only, no framework and no build step. The page runs one ticket at a
+time and shows the graph rather than just the answer: triage's route and category,
+what was retrieved, any tool result, the verifier's verdict with its notes, and the
+reply. Two things a finished answer cannot show are the reason it exists —
+
+- **a draft the verifier held back** is displayed beside the safe response that went
+  instead, marked as not sent, so a blocked answer is never a mystery;
+- **an irreversible write stops the page** and waits. `block_card` reaches a gate
+  showing the tool, the account and the reason, with Approve and Decline; the decision
+  resumes the same graph thread, and the reply afterwards says what actually happened.
+
+It takes the same flags as the runner, so `--db kestrel-openai.db --provider openai
+--llm openai` points it at the real model.
+
 ### Running against OpenAI
 
 One key covers both embeddings and the agent's model. A separate database keeps
@@ -149,8 +169,8 @@ src/kestrel/ chunking, BM25, embeddings, embedder-aware vector store,
              hybrid retrieval, cross-encoder reranking, LLM providers,
              model-output contracts, injection filter, mock tools, agent graph
 scripts/     ingest, retrieval eval, agent eval, single-ticket runner, query tool,
-             run comparison
-tests/       119 tests — table integrity, ingestion, retrieval modes, reranking,
+             run comparison, trace-visible demo server
+tests/       127 tests — table integrity, ingestion, retrieval modes, reranking,
              fail-closed model contracts, agent safety
 ```
 
@@ -1300,4 +1320,4 @@ Neither metric is worth quoting until something independent checks it.
 - [x] Verifier revise loop — a `revise` verdict sends the draft back to the answer node once, carrying the verifier's own notes and unsupported claims, then re-verifies; bounded at one pass, and `block`, a terminal route and a failed verifier call never loop (run 12: 5 drafts rewritten, 25 of 32 answered and final routing 81.2%, both clear of the noise floor, for 10% more spend)
 - [ ] Record the pre-rewrite verdict and draft per ticket — the per-ticket file keeps only the final pair, so the objection that triggered a rewrite is not in the evidence
 - [ ] KD-03's `must_contain` is stale: it expects `R5 000`, the Level 2 cap, but the ticket now runs against a Blue account whose R3 000 tier ceiling is the lower figure and therefore the right answer
-- [ ] Trace-visible demo UI
+- [x] Trace-visible demo UI — `scripts/serve_demo.py`, standard library only, showing the withheld draft and the approval gate live
