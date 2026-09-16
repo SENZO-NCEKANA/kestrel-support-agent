@@ -5,3 +5,8 @@ __pycache__/
 .venv/
 .DS_Store
 runs/
+
+# Personal documents. A CV dropped in the repo root is one `git add -A` from
+# publishing a phone number and home address to a public repo, permanently —
+# git history keeps it even after a later delete.
+*.pdf
