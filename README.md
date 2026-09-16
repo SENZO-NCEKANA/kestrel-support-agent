@@ -74,6 +74,29 @@ Scenarios 1–5 are the built-in demo tickets. Once the setup below is done, add
 `--db kestrel-openai.db --provider openai --llm openai` to any of these to use the
 real model, at under a tenth of a cent a ticket.
 
+`--account` chooses which fixture account the tools answer as, which is what decides
+whether a limit question is capped by the tier or by the verification level:
+
+```bash
+python3 scripts/run_agent.py --scenario 1 --account ACC-1002
+```
+
+| Account | Tier | FICA level | Status |
+|---|---|---|---|
+| `ACC-1001` (default) | Private | 1 | active |
+| `ACC-1002` | Blue | 2 | active |
+| `ACC-1003` | Plus | 3 | restricted |
+| `ACC-1004` | Plus | 2 | active |
+
+`--verifier-model` runs the verify node on a different model from triage and the answer.
+The `MODEL` line then names which model served each call, so a run that mixes them is
+never ambiguous:
+
+```bash
+python3 scripts/run_agent.py --db kestrel-openai.db --provider openai --llm openai \
+    --verifier-model gpt-4o --scenario 1
+```
+
 ### Running against OpenAI
 
 One key covers both embeddings and the agent's model. A separate database keeps
