@@ -286,9 +286,28 @@ def render_result(thread_id: str, subject: str, body: str, account: str, state: 
     return "".join(parts)
 
 
+def get_route(path: str) -> tuple[str, str]:
+    """Where a browser GET should land. Pure, so the routing is testable.
+
+    `/run` and `/resume` take POSTs from the form. A browser arriving at one by
+    refreshing after a submit, or by pasting the URL, used to meet a dead-end
+    404 — a poor thing to hand someone clicking around a demo. Everything
+    unrecognised now goes back to the form instead.
+    """
+    path = path.split("?", 1)[0]
+    if path in ("/", "/index.html"):
+        return ("form", "")
+    if path.startswith("/t/"):
+        return ("result", path[len("/t/"):])
+    if path == "/favicon.ico":
+        return ("empty", "")
+    return ("redirect", "/")
+
+
 class DemoHandler(BaseHTTPRequestHandler):
     agent = None          # set in main()
     threads: dict = {}    # thread_id -> the ticket it was started from
+    results: dict = {}    # thread_id -> (subject, body, account, state)
     counter = count(1)
 
     def _send(self, body: str, status: int = 200) -> None:
@@ -299,16 +318,35 @@ class DemoHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(payload)
 
+    def _redirect(self, location: str) -> None:
+        """Post-redirect-get: the result lives at its own URL, so a refresh
+        re-renders it instead of re-submitting the ticket."""
+        self.send_response(303)
+        self.send_header("Location", location)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
     def _form(self) -> dict:
         length = int(self.headers.get("Content-Length") or 0)
         raw = self.rfile.read(length).decode("utf-8", "replace")
         return {k: v[0] for k, v in parse_qs(raw, keep_blank_values=True).items()}
 
     def do_GET(self):  # noqa: N802 — http.server's interface
-        if self.path not in ("/", "/index.html"):
-            self._send(page("<p>Not found.</p>"), 404)
-            return
-        self._send(page(render_form()))
+        kind, arg = get_route(self.path)
+        if kind == "form":
+            self._send(page(render_form()))
+        elif kind == "result":
+            stored = self.results.get(arg)
+            if not stored:
+                self._redirect("/")
+                return
+            subject, body, account, state = stored
+            self._send(page(render_result(arg, subject, body, account, state)))
+        elif kind == "empty":
+            self.send_response(204)
+            self.end_headers()
+        else:
+            self._redirect(arg)
 
     def do_POST(self):  # noqa: N802
         if self.path == "/run":
@@ -323,7 +361,7 @@ class DemoHandler(BaseHTTPRequestHandler):
         subject, body = form.get("subject", "").strip(), form.get("body", "").strip()
         account = form.get("account", "") or toolkit.DEFAULT_ACCOUNT
         if not subject and not body:
-            self._send(page("<p>Give the ticket a subject or a body.</p>" + render_form()))
+            self._redirect("/")
             return
 
         thread_id = f"ui-{next(self.counter)}"
@@ -332,19 +370,21 @@ class DemoHandler(BaseHTTPRequestHandler):
         # decision belongs to whoever is looking at the page.
         state = self.agent.run(subject, body, account_id=account,
                                thread_id=thread_id, approve=None)
-        self._send(page(render_result(thread_id, subject, body, account, state)))
+        self.results[thread_id] = (subject, body, account, state)
+        self._redirect(f"/t/{thread_id}")
 
     def _resume(self) -> None:
         form = self._form()
         thread_id = form.get("thread", "")
         approved = form.get("decision") == "approve"
         if thread_id not in self.threads:
-            self._send(page("<p>That ticket is no longer waiting.</p>" + render_form()))
+            self._redirect("/")
             return
 
         subject, body, account = self.threads[thread_id]
         state = self.agent.resume(thread_id, approved)
-        self._send(page(render_result(thread_id, subject, body, account, state)))
+        self.results[thread_id] = (subject, body, account, state)
+        self._redirect(f"/t/{thread_id}")
 
     def log_message(self, fmt, *args):
         """One tidy line per request instead of http.server's default noise."""

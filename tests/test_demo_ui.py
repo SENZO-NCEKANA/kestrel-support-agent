@@ -103,6 +103,25 @@ def test_rendering_survives_a_partial_state():
     assert demo.render_result("t", "", "", "", {}) is not None
 
 
+def test_a_browser_get_never_dead_ends():
+    """`/run` and `/resume` take POSTs from the form. Landing on one by pasting
+    the URL, or by refreshing after a submit, used to return a 404 — which is
+    what you meet first if you reload the page you just submitted."""
+    assert demo.get_route("/run") == ("redirect", "/")
+    assert demo.get_route("/resume") == ("redirect", "/")
+    assert demo.get_route("/nonsense") == ("redirect", "/")
+
+
+def test_a_result_has_its_own_url_so_refresh_works():
+    """Post-redirect-get: the ticket's result lives at /t/<thread>, so reloading
+    re-renders it instead of re-running the ticket."""
+    assert demo.get_route("/") == ("form", "")
+    assert demo.get_route("/index.html") == ("form", "")
+    assert demo.get_route("/t/ui-7") == ("result", "ui-7")
+    assert demo.get_route("/t/ui-7?from=bookmark") == ("result", "ui-7")
+    assert demo.get_route("/favicon.ico") == ("empty", "")
+
+
 def test_the_form_names_every_fixture_account():
     """The account decides whether a limit question is capped by tier or by
     verification level, so the page has to make the choice visible."""
