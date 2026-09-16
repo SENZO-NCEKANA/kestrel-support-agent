@@ -87,6 +87,11 @@ _REFUSE = [
 
 _TOOLS = [
     (r"my current daily|what is my current|my limit on my account", ["get_account_profile"]),
+    # The customer's own claim about tier or level is not a fact: a question whose
+    # answer turns on either fetches the profile. See the same rule in triage.md.
+    (r"verified to level|my verification level|upgrade from \w+ to \w+"
+     r"|withdrawal declined|withdrawal was declined|can only draw",
+     ["get_account_profile"]),
     (r"do not recognise|dont recognise|unknown charge|charge on my statement",
      ["get_transactions"]),
     (r"\bDSP-\d+|my dispute|lodged a dispute", ["get_dispute_status"]),

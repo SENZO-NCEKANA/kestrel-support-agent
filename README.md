@@ -127,7 +127,7 @@ src/kestrel/ chunking, BM25, embeddings, embedder-aware vector store,
              model-output contracts, injection filter, mock tools, agent graph
 scripts/     ingest, retrieval eval, agent eval, single-ticket runner, query tool,
              run comparison
-tests/       100 tests — table integrity, ingestion, retrieval modes, reranking,
+tests/       106 tests — table integrity, ingestion, retrieval modes, reranking,
              fail-closed model contracts, agent safety
 ```
 
@@ -390,7 +390,7 @@ as well, [below](#running-with-a-real-model).
 |---|---|---|---|
 | Injection catch rate | 6 | 100% | yes — rule-based, no model |
 | Injection false positives | 42 | 0% | yes — the half that makes the first half mean something |
-| Tool selection | 6 | 100% | yes, on the six tickets that expect a tool — which is not the whole question, see below |
+| Tool selection | 10 | 100% | yes, on the tickets that expect a tool — which is not the whole question, see below |
 | Unrequested writes | 48 | 0 | yes — and 1 until run 6, on every build, uncounted |
 | Forbidden-content violations | 48 | 0 | yes — the text was actually emitted or it was not |
 | LLM call failures | 48 | 0 | yes — the call completed or it did not |
@@ -467,7 +467,9 @@ place of them.
 
 The stub's routing column is the circular 100% explained above; only the real
 runs measure anything. Unrequested writes were not counted before run 5 showed
-they needed to be. Every column is a single run;
+they needed to be. Tool selection is scored on the tickets that expect a tool: six
+through run 9, ten from run 10, when the four tickets whose answer turns on tier or
+verification level were given the profile fetch they need. Every column is a single run;
 [How much of this is noise](#how-much-of-this-is-noise) measures how far one moves
 when nothing changes.
 
@@ -937,7 +939,7 @@ The knowledge base is written to be hard on purpose:
 
 Each case carries `category`, `expected_route`, `expected_sources`, `expected_tools`, `must_contain`, and `must_not_contain`. `must_not_contain` is the important one — it catches the failure where the model says something true and forbidden.
 
-Sixteen cases also carry an `account_id`, because their text names a tier, a verification level or a dispute reference: those run against the fixture account that matches. Runs 1 to 8 ran all 48 against one Private, Level 1 account, which is why KD-03 — "my account is verified to Level 2" — could not be answered correctly by anyone in the chain. A case that names no account still gets the default.
+Seventeen cases also carry an `account_id`, because their text names a tier, a verification level or a dispute reference: those run against the fixture account that matches. Runs 1 to 8 ran all 48 against one Private, Level 1 account, which is why KD-03 — "my account is verified to Level 2" — could not be answered correctly by anyone in the chain. A case that names no account still gets the default.
 
 ## Metrics tracked
 
@@ -951,6 +953,9 @@ Measured by `scripts/eval_retrieval.py` and `scripts/eval_agent.py`:
 - Tool selection against `expected_tools`, on the tickets that expect a tool
 - Unrequested writes — a write that ran on a ticket that did not ask for it — on
   every ticket, and a CI gate
+- Unexpected read tools — a read that ran on a ticket expecting none — on every
+  ticket, reported and deliberately not gated: a read changes nothing, so it is not
+  a defect, but it moves answers and tool selection cannot see it
 - Forbidden-content violations against `must_not_contain` — a CI gate
 - `must_contain` coverage — **only under a real model**; the stub writes no answers
 - Verifier verdict counts and the unsupported claims it reports
@@ -1006,8 +1011,8 @@ Neither metric is worth quoting until something independent checks it.
 - [x] An executed write is stated in the reply, even on an escalated ticket
 - [x] Per-ticket eval results, so a paid run is never repeated to inspect it
 - [x] Each eval ticket runs against the account its own text describes (16 of 48 name one; runs 1–8 all ran against a single Private, Level 1 account — run 9: the fixtures are coherent, and no metric moved, because only 2 of the re-pointed tickets fetch anything)
-- [ ] Measure read-tool calls on tickets that expect none — tool selection is scored only where a tool is expected, so triage fetching the account profile on one run and not the next is invisible, exactly as the unrequested write was before run 6
-- [ ] Triage fetches the account profile when the answer turns on tier or verification level — KD-03, TP-02 and KM-05 assert the customer's level from the ticket and fetch nothing, and the verifier is right to send them back
+- [x] Unexpected read tools reported on every ticket — the read half of the blind spot that hid an unrequested write until run 6; reported, not gated, because a read changes nothing
+- [x] A claimed tier or verification level is treated as a claim: triage fetches the profile when the answer turns on either, and the four tickets that need it now expect it (KD-03, KM-01, KM-05, TP-05)
 - [ ] Fraud exception applied to a theft report — TR-04 is right for the wrong reason
 - [ ] How-to questions about account actions are escalated rather than answered (KD-09)
 - [ ] Over-clarification: answerable tickets sent back to the customer with a question

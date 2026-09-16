@@ -393,6 +393,29 @@ def test_triage_prompt_routes_account_questions_to_tools(retriever):
     assert "that still wins" in system
 
 
+def test_triage_prompt_treats_a_claimed_level_as_a_claim(retriever):
+    """Run 9: KD-03 says "verified to Level 2", triage fetched nothing, the draft
+    repeated the ticket's claim as fact, and the verifier sent it back for assuming
+    it. The level that binds is the one on the account."""
+    llm = ScriptedLLM()
+    KestrelAgent(retriever, llm).run("Monthly fee on Blue", "What is the monthly fee on Blue?",
+                                     thread_id="c-triage-claimed-level", approve=True)
+    system = " ".join(llm.systems["triage"].split())
+    assert "making a claim about their account, not supplying a fact" in system
+    assert "even when the ticket names it" in system
+
+
+def test_stub_fetches_the_profile_when_the_ticket_claims_a_level(retriever):
+    """The offline path follows the same rule, so the stub keeps measuring the
+    behaviour the prompt asks for rather than an older one."""
+    llm = StubLLM()
+    out = KestrelAgent(retriever, llm).run(
+        "ATM daily limit on Level 2",
+        "My account is verified to Level 2. What is my daily ATM withdrawal limit?",
+        thread_id="c-stub-claimed-level", approve=True)
+    assert "get_account_profile" in (out.get("tool_calls") or [])
+
+
 def test_triage_prompt_keeps_the_write_tool_to_explicit_requests(retriever):
     """Run 5: the account-data rule let triage select block_card for a question
     about how blocking works, and the eval's auto-approval ran it. The rule

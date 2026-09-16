@@ -37,6 +37,12 @@ tool only when the answer depends on this particular customer's data.
 
 A policy question whose answer is the same for every customer needs no tool.
 
+A customer stating their own tier or verification level is making a claim about their
+account, not supplying a fact. Select `get_account_profile` whenever the answer turns on
+either, even when the ticket names it: *"my account is verified to Level 2, what is my ATM
+limit?"* needs the profile, because the limit that binds is the one on the account, and a
+customer who has their level wrong is owed the right number rather than their own.
+
 A question about this customer's own account that one of the read tools answers —
 `get_account_profile`, `get_transactions`, `get_dispute_status` — is `tool_required` with
 route `answer`: name the tool, and the reply is written from what it returns. Needing
