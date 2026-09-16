@@ -39,6 +39,14 @@ ACCOUNTS: dict[str, dict] = {
         "verification_level": 3, "status": "restricted",
         "card_id": "CRD-5503", "opened": "2022-01-30",
     },
+    # A Plus account that is not restricted. ACC-1003 is restricted on purpose,
+    # for the tickets about a frozen account; a fee or benefits question asked by
+    # a Plus customer needs an account where nothing else is going on.
+    "ACC-1004": {
+        "account_id": "ACC-1004", "name": "L. Dlamini", "tier": "Plus",
+        "verification_level": 2, "status": "active",
+        "card_id": "CRD-5504", "opened": "2025-03-19",
+    },
 }
 
 TRANSACTIONS: dict[str, list[dict]] = {
@@ -62,6 +70,12 @@ TRANSACTIONS: dict[str, list[dict]] = {
         {"date": "2026-08-01", "description": "Monthly account fee - Plus", "amount": -135.00,
          "reference": "TXN-88103"},
     ],
+    "ACC-1004": [
+        {"date": "2026-08-01", "description": "Monthly account fee - Plus", "amount": -135.00,
+         "reference": "TXN-88104"},
+        {"date": "2026-07-22", "description": "Card purchase - Woolworths", "amount": -1240.50,
+         "reference": "TXN-87540"},
+    ],
 }
 
 DISPUTES: dict[str, dict] = {
@@ -83,6 +97,7 @@ CARDS: dict[str, dict] = {
     "CRD-5501": {"card_id": "CRD-5501", "account_id": "ACC-1001", "status": "active"},
     "CRD-5502": {"card_id": "CRD-5502", "account_id": "ACC-1002", "status": "active"},
     "CRD-5503": {"card_id": "CRD-5503", "account_id": "ACC-1003", "status": "active"},
+    "CRD-5504": {"card_id": "CRD-5504", "account_id": "ACC-1004", "status": "active"},
 }
 
 DEFAULT_ACCOUNT = "ACC-1001"

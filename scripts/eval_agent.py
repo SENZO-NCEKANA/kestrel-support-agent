@@ -196,7 +196,12 @@ def main():
 
     for case in cases:
         started = time.perf_counter()
+        # Each ticket runs against the account its text describes. Before this,
+        # all 48 ran against ACC-1001 — so KD-03 said "verified to Level 2" while
+        # the tools reported Level 1, and neither the draft nor the verifier could
+        # be right. A case without an account_id still gets the default.
         out = agent.run(case["subject"], case["body"],
+                        account_id=case.get("account_id", ""),
                         thread_id=f"ev-{case['id']}", approve=True)
         latencies.append((time.perf_counter() - started) * 1000)
         n += 1
@@ -295,6 +300,7 @@ def main():
                 "expected_route": want,
                 "triage_route": got_triage,
                 "final_route": got_final,
+                "account_id": case.get("account_id") or toolkit.DEFAULT_ACCOUNT,
                 "expected_tools": sorted(expected_tools),
                 "tools_run": sorted(tools_run),
                 "executed_writes": case_writes,

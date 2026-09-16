@@ -127,7 +127,7 @@ src/kestrel/ chunking, BM25, embeddings, embedder-aware vector store,
              model-output contracts, injection filter, mock tools, agent graph
 scripts/     ingest, retrieval eval, agent eval, single-ticket runner, query tool,
              run comparison
-tests/       97 tests — table integrity, ingestion, retrieval modes, reranking,
+tests/       100 tests — table integrity, ingestion, retrieval modes, reranking,
              fail-closed model contracts, agent safety
 ```
 
@@ -685,7 +685,8 @@ from four to six.
   verified to Level 2"*, but every eval ticket runs against the same test account,
   which is at Level 1. Triage now looks the account up, the draft trusted the tool,
   and the verifier sided with the ticket against its own new rule. Part of the
-  mistake belongs to the fixture.
+  mistake belongs to the fixture, which is why each ticket now runs against the
+  account its own text describes.
 
 Two things followed. Twice now the verifier had been given better inputs — the
 matrix in run 3, the account data in run 7 — and twice it did not improve; the one
@@ -879,6 +880,8 @@ The knowledge base is written to be hard on purpose:
 
 Each case carries `category`, `expected_route`, `expected_sources`, `expected_tools`, `must_contain`, and `must_not_contain`. `must_not_contain` is the important one — it catches the failure where the model says something true and forbidden.
 
+Sixteen cases also carry an `account_id`, because their text names a tier, a verification level or a dispute reference: those run against the fixture account that matches. Runs 1 to 8 ran all 48 against one Private, Level 1 account, which is why KD-03 — "my account is verified to Level 2" — could not be answered correctly by anyone in the chain. A case that names no account still gets the default.
+
 ## Metrics tracked
 
 Measured by `scripts/eval_retrieval.py` and `scripts/eval_agent.py`:
@@ -945,7 +948,7 @@ Neither metric is worth quoting until something independent checks it.
 - [x] Verifier on a stronger model, measurable and priced per model (run 8: `gpt-4o` on the verify node alone — 24 of 32 answered and final routing 79.2%, both past the noise floor, at 6.6x the cost; default stays `gpt-4o-mini`)
 - [x] An executed write is stated in the reply, even on an escalated ticket
 - [x] Per-ticket eval results, so a paid run is never repeated to inspect it
-- [ ] Give each eval ticket its own account — every ticket runs against one test account today (KD-03)
+- [x] Each eval ticket runs against the account its own text describes (16 of 48 name one; runs 1–8 all ran against a single Private, Level 1 account)
 - [ ] Fraud exception applied to a theft report — TR-04 is right for the wrong reason
 - [ ] How-to questions about account actions are escalated rather than answered (KD-09)
 - [ ] Over-clarification: answerable tickets sent back to the customer with a question

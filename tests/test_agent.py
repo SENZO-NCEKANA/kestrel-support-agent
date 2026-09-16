@@ -163,6 +163,42 @@ def test_read_tools_need_no_approval(agent):
     assert any("get_account_profile" in r for r in out["tool_results"])
 
 
+# ------------------------------------------------------- per-ticket accounts
+
+def test_a_ticket_runs_against_its_own_account(agent):
+    """Every eval ticket used to run against ACC-1001. KD-03 says "verified to
+    Level 2" while that account is Level 1, so the draft and the verifier could
+    not both be right, and the run 7 finding about it was confounded by the
+    fixture. The account now travels with the ticket."""
+    out = agent.run("What is my limit", "What is my current daily ATM withdrawal limit?",
+                    account_id="ACC-1002", thread_id="acct-per-ticket")
+    profile = "\n".join(out.get("tool_results") or [])
+    assert "ACC-1002" in profile and "verification_level: 2" in profile
+    assert "ACC-1001" not in profile
+
+
+def test_every_eval_account_exists_in_the_fixtures(cases):
+    """An account the fixtures do not have falls back to the default silently,
+    which would quietly re-create the confound this field exists to remove."""
+    named = {c["account_id"] for c in cases if c.get("account_id")}
+    unknown = sorted(named - set(toolkit.ACCOUNTS))
+    assert not unknown, f"eval cases name accounts that do not exist: {unknown}"
+
+
+def test_a_referenced_dispute_belongs_to_its_ticket_account(cases):
+    """TR-03 quotes DSP-40192, which is ACC-1002's dispute. Pointing that ticket
+    at another account would ask the tool for a dispute the customer does not
+    have."""
+    by_id = {c["id"]: c for c in cases}
+    for cid, reference in (("TR-03", "DSP-40192"),):
+        case = by_id[cid]
+        assert reference in case["body"]
+        expected = toolkit.DISPUTES[reference]["account_id"]
+        assert case.get("account_id") == expected, (
+            f"{cid} references {reference} on {expected} but runs as "
+            f"{case.get('account_id') or toolkit.DEFAULT_ACCOUNT}")
+
+
 # ------------------------------------------------------------------ injection
 
 def test_injection_caught_on_every_injection_case(cases):
