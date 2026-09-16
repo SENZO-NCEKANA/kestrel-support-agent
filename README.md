@@ -127,7 +127,7 @@ src/kestrel/ chunking, BM25, embeddings, embedder-aware vector store,
              model-output contracts, injection filter, mock tools, agent graph
 scripts/     ingest, retrieval eval, agent eval, single-ticket runner, query tool,
              run comparison
-tests/       113 tests — table integrity, ingestion, retrieval modes, reranking,
+tests/       115 tests — table integrity, ingestion, retrieval modes, reranking,
              fail-closed model contracts, agent safety
 ```
 

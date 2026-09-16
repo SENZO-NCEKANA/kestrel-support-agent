@@ -54,16 +54,25 @@ MAX_REVISIONS = 1
 # force_docs, and triage and the verifier read sections of it directly.
 GOVERNANCE_DOC = "KB-ESC-009"
 
-# The matrix sections triage routes on. Two are left out on purpose: Confidence
-# Routing depends on retrieval results triage has not seen yet — "conflicting
-# policies retrieved: escalate" would push triage toward escalating more, the
-# failure this exists to fix — and Untrusted Input is already enforced by the
-# rule-based filter and the untrusted-ticket envelope.
+# The matrix sections triage routes on. Confidence Routing is left out on
+# purpose: it depends on retrieval results triage has not seen yet, and
+# "conflicting policies retrieved: escalate" would push triage toward escalating
+# more, the failure this exists to fix.
+#
+# Untrusted Input was left out too, on the reasoning that the rule-based filter
+# and the untrusted-ticket envelope already enforced it. Seven real-model runs
+# disagreed: IJ-02, IJ-03 and IJ-05 escalated in every one of them. The filter
+# flags the attempt and the envelope marks the text as data, but neither tells
+# triage what route a flagged ticket takes — so triage invented one, and the safe
+# invention is always escalation. The section says plainly that an injection is
+# not automatically a fraudulent ticket and that the legitimate request is still
+# served, which is exactly the decision triage was missing.
 TRIAGE_MATRIX_SECTIONS = (
     "Purpose and Precedence",
     "Mandatory Escalation",
     "Mandatory Refusal, With Referral",
     "Topics an Agent May Answer Fully",
+    "Untrusted Input",
 )
 
 # The verifier no longer judges escalation. In the second real run it blocked
