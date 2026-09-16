@@ -61,12 +61,24 @@ class ScriptedLLM:
         self.calls: list[str] = []
         self.payloads: dict[str, str] = {}  # last user payload sent, per task
         self.systems: dict[str, str] = {}   # last system prompt sent, per task
+        self.all_payloads: dict[str, list[str]] = {}  # every payload, in order
+        self.counts: dict[str, int] = {}
 
     def complete(self, system: str, user: str, task: str = "") -> LLMResponse:
         self.calls.append(task)
         self.payloads[task] = user
         self.systems[task] = system
-        return self.responses.get(task, LLMResponse(text=""))
+        self.all_payloads.setdefault(task, []).append(user)
+
+        # A list is consumed in order and its last entry repeats, so a test can
+        # script a verifier that says `revise` once and then something else —
+        # which is the only way to exercise the rewrite loop offline.
+        queued = self.responses.get(task, LLMResponse(text=""))
+        index = self.counts.get(task, 0)
+        self.counts[task] = index + 1
+        if isinstance(queued, list):
+            return queued[min(index, len(queued) - 1)]
+        return queued
 
 
 @pytest.fixture(scope="module")
@@ -516,3 +528,87 @@ def test_a_verifier_model_is_refused_under_the_stub():
     verdicts as the stronger model's."""
     with pytest.raises(ValueError):
         get_llm("stub", model="gpt-4o")
+
+
+# --------------------------------------------------------------- the revise loop
+
+REDRAFT = "REDRAFT-SENTINEL: the fee is R60 per month, per the fee schedule."
+REVISE = LLMResponse(text="{}", data=dict(
+    VALID_VERDICT, verdict="revise", notes="the fee is not supported by the context",
+    unsupported_claims=["the fee is R60 per month"]))
+
+
+def test_a_revise_verdict_buys_one_rewrite_and_the_second_draft_is_sent(retriever):
+    """`revise` used to block, identical to `block`, so the verifier's own finding
+    that a draft was fixable threw the answer away."""
+    llm = ScriptedLLM(answer=[LLMResponse(text=DRAFT), LLMResponse(text=REDRAFT)],
+                      verify=[REVISE, LLMResponse(text="{}", data=dict(VALID_VERDICT))])
+    out = KestrelAgent(retriever, llm).run(
+        "Monthly fee on Blue", "What is the monthly fee on Blue?",
+        thread_id="c-revise-once", approve=True)
+    assert llm.calls == ["triage", "answer", "verify", "answer", "verify"]
+    assert out["revisions"] == 1
+    assert REDRAFT in out["reply"]
+    assert DRAFT not in out["reply"]
+
+
+def test_the_rewrite_is_given_the_verifier_objection(retriever):
+    """A rewrite without the objection is just a second guess at the same prompt."""
+    llm = ScriptedLLM(answer=[LLMResponse(text=DRAFT), LLMResponse(text=REDRAFT)],
+                      verify=[REVISE, LLMResponse(text="{}", data=dict(VALID_VERDICT))])
+    KestrelAgent(retriever, llm).run("Monthly fee on Blue", "What is the monthly fee on Blue?",
+                                     thread_id="c-revise-objection", approve=True)
+    first, second = llm.all_payloads["answer"]
+    assert "verifier objection" not in first
+    assert "the fee is not supported by the context" in second
+    assert "- unsupported: the fee is R60 per month" in second
+
+
+def test_a_second_revise_ends_the_loop_with_a_safe_response(retriever):
+    """The bound is the point. A verifier that keeps saying `revise` costs one
+    extra pass, not a run, and the customer never gets the faulted draft."""
+    llm = ScriptedLLM(answer=[LLMResponse(text=DRAFT), LLMResponse(text=REDRAFT)],
+                      verify=REVISE)
+    out = KestrelAgent(retriever, llm).run(
+        "Monthly fee on Blue", "What is the monthly fee on Blue?",
+        thread_id="c-revise-twice", approve=True)
+    assert llm.calls.count("answer") == 2, "more than one rewrite"
+    assert out["route"] == "escalate"
+    assert out["reply"] == SAFE_RESPONSES["escalate"]
+    assert REDRAFT not in out["reply"]
+
+
+def test_a_block_verdict_never_rewrites(retriever):
+    """Forbidden content or an obeyed injection is not a wording problem."""
+    llm = ScriptedLLM(verify=LLMResponse(text="{}", data=dict(VALID_VERDICT, verdict="block")))
+    out = KestrelAgent(retriever, llm).run(
+        "Monthly fee on Blue", "What is the monthly fee on Blue?",
+        thread_id="c-block-no-loop", approve=True)
+    assert llm.calls == ["triage", "answer", "verify"]
+    assert out.get("revisions", 0) == 0
+    assert DRAFT not in out["reply"]
+
+
+def test_a_terminal_route_never_rewrites(retriever):
+    """Triage escalated it. No draft may reach the customer, so rewriting one is
+    work done to throw away — and a route back into the answer node on an
+    escalated ticket is the shape of the failure this graph exists to prevent."""
+    escalated = dict(VALID_TRIAGE, route="escalate", category="escalate_mandatory")
+    llm = ScriptedLLM(triage=LLMResponse(text="{}", data=escalated), verify=REVISE)
+    out = KestrelAgent(retriever, llm).run(
+        "Have you reported me", "Has Kestrel filed a report about my account?",
+        thread_id="c-terminal-no-loop", approve=True)
+    assert llm.calls.count("answer") == 1
+    assert out["route"] == "escalate"
+    assert DRAFT not in out["reply"]
+
+
+def test_a_failed_verifier_call_blocks_without_rewriting(retriever):
+    """A verifier that is down fails closed to `block`, and `block` does not loop,
+    so an outage cannot drive rewrites at a model call apiece."""
+    llm = ScriptedLLM(verify=LLMResponse(ok=False, error="RateLimitError: 429"))
+    out = KestrelAgent(retriever, llm).run(
+        "Monthly fee on Blue", "What is the monthly fee on Blue?",
+        thread_id="c-verify-down-no-loop", approve=True)
+    assert llm.calls == ["triage", "answer", "verify"]
+    assert out["route"] == "escalate"

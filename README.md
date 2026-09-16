@@ -127,7 +127,7 @@ src/kestrel/ chunking, BM25, embeddings, embedder-aware vector store,
              model-output contracts, injection filter, mock tools, agent graph
 scripts/     ingest, retrieval eval, agent eval, single-ticket runner, query tool,
              run comparison
-tests/       107 tests — table integrity, ingestion, retrieval modes, reranking,
+tests/       113 tests — table integrity, ingestion, retrieval modes, reranking,
              fail-closed model contracts, agent safety
 ```
 
@@ -333,7 +333,9 @@ Regression tests: `test_no_blanket_precedence_on_unrelated_query`,
 
 ## The agent
 
-`triage → retrieve → [tools] → answer → verify → finalise`, built on LangGraph.
+`triage → retrieve → [tools] → answer → verify → finalise`, built on LangGraph, with
+one bounded loop: a `revise` verdict sends the draft back to `answer` once, carrying
+the verifier's objection, and whatever comes back is verified again and then finalised.
 
 ```bash
 python3 scripts/run_agent.py --scenario 4
@@ -1021,6 +1023,8 @@ Measured by `scripts/eval_retrieval.py` and `scripts/eval_agent.py`:
 - Forbidden-content violations against `must_not_contain` — a CI gate
 - `must_contain` coverage — **only under a real model**; the stub writes no answers
 - Verifier verdict counts and the unsupported claims it reports
+- Drafts rewritten after a `revise` verdict — the loop's own cost, one extra answer
+  call and one extra verify call apiece, already priced in the totals above
 - LLM call failures, and the tickets they failed closed
 - p95 and mean latency per ticket, measured end to end around the graph
 - Tokens and cost per ticket — **only under `LLM_PROVIDER=openai`**
@@ -1080,5 +1084,5 @@ Neither metric is worth quoting until something independent checks it.
 - [ ] How-to questions about account actions are escalated rather than answered (KD-09)
 - [ ] Over-clarification: answerable tickets sent back to the customer with a question
 - [ ] Independent groundedness and hallucination-rate scoring
-- [ ] Verifier revise loop (`revise` currently blocks, same as `block`)
+- [x] Verifier revise loop — a `revise` verdict sends the draft back to the answer node once, carrying the verifier's own notes and unsupported claims, then re-verifies; bounded at one pass, and `block`, a terminal route and a failed verifier call never loop
 - [ ] Trace-visible demo UI

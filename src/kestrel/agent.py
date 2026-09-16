@@ -2,6 +2,8 @@
 The support agent as a state machine.
 
 triage -> retrieve -> [tools] -> answer -> verify -> finalise
+                                    ^        |
+                                    +--------+  one rewrite on `revise`
 
 Safety lives in the shape of the graph, not in the wording of a prompt. A
 tipping-off question is routed to escalate by triage and never reaches the
@@ -39,6 +41,14 @@ PROMPTS = Path(__file__).resolve().parents[2] / "prompts"
 
 # Routes that must never produce a drafted answer.
 TERMINAL_ROUTES = {"escalate", "refuse", "clarify"}
+
+# How many times a draft may go back to the answer node on a `revise` verdict.
+# One. The loop is an extra chance, never a weakening: a ticket that uses it up
+# finalises exactly as it did before the loop existed, because `revise` is still
+# a blocking verdict at finalise. The count is incremented in n_answer rather
+# than on the edge, so the bound holds even if the edge logic changes later, and
+# a verifier stuck on `revise` costs one extra pass rather than a run's budget.
+MAX_REVISIONS = 1
 
 # The internal escalation and routing matrix. It reaches the answer layer through
 # force_docs, and triage and the verifier read sections of it directly.
@@ -118,6 +128,9 @@ class TicketState(TypedDict, total=False):
     actions_taken: list[str]
     approved: bool | None
     draft: str
+    # Rewrites this ticket has had after a `revise` verdict. Bounded by
+    # MAX_REVISIONS, and read by the edge out of verify.
+    revisions: int
     verdict: dict
     reply: str
     trace: Annotated[list[str], lambda a, b: (a or []) + (b or [])]
@@ -183,6 +196,29 @@ def _account_data(state: TicketState) -> str:
     if not state.get("tool_results"):
         return ""
     return "--- account data (from tools) ---\n" + "\n".join(state["tool_results"])
+
+
+def _objection(state: TicketState) -> str:
+    """The verifier's objection, rendered for a rewrite.
+
+    Only what the verifier actually said — its notes and the claims it could not
+    find support for. Nothing is paraphrased or added: a rewrite prompt that
+    restated the objection in its own words would be a third opinion about the
+    draft, and the answer node would be rewriting against the wrong one.
+    """
+    verdict = state.get("verdict") or {}
+    if verdict.get("verdict") != "revise":
+        return ""
+
+    lines = []
+    if verdict.get("notes"):
+        lines.append(str(verdict["notes"]).strip())
+    claims = verdict.get("unsupported_claims")
+    if isinstance(claims, list):
+        lines += [f"- unsupported: {c}" for c in claims if isinstance(c, str) and c.strip()]
+    if not lines:
+        return ""
+    return "--- verifier objection (rewrite the draft) ---\n" + "\n".join(lines)
 
 
 class KestrelAgent:
@@ -304,10 +340,25 @@ class KestrelAgent:
             parts.append(account_data)
         parts.append(injection.wrap_untrusted(state.get("subject", ""),
                                               state.get("body", "")))
+
+        # On a rewrite the verifier's objection goes in beside the same context
+        # the faulted draft was written from. It names the claim; the answer node
+        # grounds it or drops it. See the Revision section of answer.md.
+        #
+        # The pass is counted on the verdict, not on whether an objection rendered:
+        # a `revise` carrying no notes and no claims would otherwise increment
+        # nothing and the graph would circle between answer and verify.
+        revising = (state.get("verdict") or {}).get("verdict") == "revise"
+        objection = _objection(state) if revising else ""
+        if objection:
+            parts.append(objection)
+
         resp = self.llm.complete(self.prompts["answer"], "\n\n".join(parts), task="answer")
         return {"draft": resp.text,
+                "revisions": (state.get("revisions") or 0) + (1 if revising else 0),
                 "llm_calls": [_call_record("answer", resp, self.llm)],
-                "trace": [f"answer: drafted {len(resp.text)} chars"]}
+                "trace": [f"answer: {'redrafted' if revising else 'drafted'} "
+                          f"{len(resp.text)} chars"]}
 
     def n_verify(self, state: TicketState) -> dict:
         # The verifier judges the draft's content: whether its claims are grounded,
@@ -352,10 +403,11 @@ class KestrelAgent:
         # verdict is an absent gate, not a passed one.
         verdict = (state.get("verdict") or {}).get("verdict", FAILSAFE_VERDICT)
 
-        # `revise` blocks too. The verifier prompt offers it as "supportable with
-        # the unsupported claims removed", but nothing removes them — see
-        # contracts.py. Sending an unrevised draft the verifier just flagged is
-        # the one option that is not defensible.
+        # `revise` still blocks here, and that is not the same as ignoring it. A
+        # draft arriving on a revise verdict has already had its one rewrite, or
+        # was never eligible for one (see _after_verify), so the claims the
+        # verifier faulted are still in it. Sending that is the one option that
+        # is not defensible.
         if route in TERMINAL_ROUTES or verdict in BLOCKING_VERDICTS:
             final_route = route if route in TERMINAL_ROUTES else "escalate"
             note = (f"{verdict} by verifier"
@@ -397,6 +449,25 @@ class KestrelAgent:
     def _after_tools(state: TicketState) -> str:
         return "answer"
 
+    @staticmethod
+    def _after_verify(state: TicketState) -> str:
+        """One rewrite on a `revise`, then finalise whatever comes back.
+
+        Three conditions, all required. `block` never loops: forbidden content or
+        an obeyed injection is not a wording problem, and a failed verifier call
+        fails closed to `block`, so a verifier that is down cannot drive rewrites.
+        A terminal route never loops: triage escalated or refused the ticket, no
+        draft may reach the customer, and n_verify has already blocked it. And the
+        bound is hard, so a model that answers `revise` forever costs one extra
+        pass rather than a run.
+        """
+        verdict = (state.get("verdict") or {}).get("verdict", FAILSAFE_VERDICT)
+        if (verdict == "revise"
+                and (state.get("revisions") or 0) < MAX_REVISIONS
+                and state.get("route") not in TERMINAL_ROUTES):
+            return "answer"
+        return "finalise"
+
     def _build(self):
         g = StateGraph(TicketState)
         g.add_node("triage", self.n_triage)
@@ -414,7 +485,8 @@ class KestrelAgent:
                                 {"tools": "tools", "answer": "answer"})
         g.add_edge("tools", "answer")
         g.add_edge("answer", "verify")
-        g.add_edge("verify", "finalise")
+        g.add_conditional_edges("verify", self._after_verify,
+                                {"answer": "answer", "finalise": "finalise"})
         g.add_edge("finalise", END)
         g.add_edge("clarify", END)
 

@@ -206,6 +206,7 @@ def main():
     tokens_by_model: dict[str, list[int]] = defaultdict(lambda: [0, 0])
     verdicts: Counter = Counter()
     unsupported_claims = unsupported_tickets = 0
+    rewritten_drafts = 0
     stopped = ""
     n = 0
 
@@ -265,6 +266,8 @@ def main():
         # -- verifier's own report
         verdict = out.get("verdict") or {}
         verdicts[verdict.get("verdict", "none")] += 1
+        revisions = out.get("revisions") or 0
+        rewritten_drafts += 1 if revisions else 0
         claims = verdict.get("unsupported_claims") or []
         if isinstance(claims, list) and claims:
             unsupported_claims += len(claims)
@@ -328,6 +331,7 @@ def main():
                 "actions_taken": out.get("actions_taken") or [],
                 "injection_flag": flagged,
                 "verdict": verdict,
+                "revisions": revisions,
                 "must_contain_hit": contain_hit,
                 "must_contain_missed": [r for r in required if r not in contain_hit],
                 "violations": case_violations,
@@ -425,6 +429,9 @@ def main():
           + f"   no verdict={verdicts['none']} (clarify skips the verifier)")
     print(f"  unsupported claims reported: {unsupported_claims} "
           f"across {unsupported_tickets} ticket(s)")
+    # A rewrite costs one more answer call and one more verify call, both already
+    # priced above. The verdicts on this line are the ones after the rewrite.
+    print(f"  drafts rewritten after a revise verdict: {rewritten_drafts}")
     if is_stub:
         print("  The stub verifier passes everything. Blocks here are the graph's own"
               "\n  override on escalate and refuse routes, not the verifier's judgement.")

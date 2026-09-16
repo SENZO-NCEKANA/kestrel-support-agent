@@ -22,11 +22,13 @@ That direction is the whole point. A support agent whose model is down should
 stop, not start answering compliance questions from a keyword fallback. Getting
 this backwards is not a graceful degradation, it is an outage that answers.
 
-`revise` is treated as blocking. The verifier prompt documents it as "supportable
-with the unsupported claims removed", but nothing removes them — a revise loop
-that feeds `unsupported_claims` back to the answer node needs a model to be worth
-building. Until it exists the choice is between sending a draft the verifier
-just said was wrong and escalating, and only one of those is defensible.
+`revise` is still blocking here, which is not the same as ignoring it. The graph
+sends a faulted draft back to the answer node once, with the verifier's own notes
+and unsupported claims attached, and re-verifies what comes back — see
+`MAX_REVISIONS` in agent.py. This module has the last word after that: a draft
+still carrying `revise` at finalise has already had its rewrite, so the choice is
+again between sending a draft the verifier faulted and escalating, and only one of
+those is defensible.
 """
 
 from __future__ import annotations
