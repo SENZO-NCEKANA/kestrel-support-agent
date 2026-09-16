@@ -177,6 +177,18 @@ def test_a_ticket_runs_against_its_own_account(agent):
     assert "ACC-1001" not in profile
 
 
+def test_the_profile_fetch_rule_never_reaches_the_write_tool(agent):
+    """Run 10: the rule telling triage to fetch the profile when the answer turns
+    on tier or level pulled the write tool in with it. KD-09 — "how do I block my
+    card?" — selected block_card and the eval's auto-approval ran it, while TR-04,
+    which actually asks for a block, was escalated. The request decides, not the
+    topic, and the prompt has to say so beside the fetch rule rather than three
+    paragraphs later."""
+    system = " ".join(agent.prompts["triage"].split())
+    assert "reaches the read tools only, and never `block_card`" in system
+    assert "the request is what decides, not the topic" in system
+
+
 def test_every_eval_account_exists_in_the_fixtures(cases):
     """An account the fixtures do not have falls back to the default silently,
     which would quietly re-create the confound this field exists to remove."""
